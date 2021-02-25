@@ -464,16 +464,10 @@ Router* host_getUpstreamRouter(Host* host, in_addr_t handle) {
     return networkinterface_getRouter(interface);
 }
 
-void host_associateInterface(Host* host, Socket* socket, in_addr_t bindAddress,
-                             in_port_t bindPort, in_addr_t peerAddress,
-                             in_port_t peerPort) {
+void host_associateInterfaceLegacySocket(Host* host, Socket* socket, in_addr_t bindAddress) {
     MAGIC_ASSERT(host);
 
-    /* connect up socket layer */
-    socket_setPeerName(socket, peerAddress, peerPort);
-    socket_setSocketName(socket, bindAddress, bindPort);
-
-    /* now associate the interfaces corresponding to bindAddress with socket */
+    /* associate the interfaces corresponding to bindAddress with socket */
     if(bindAddress == htonl(INADDR_ANY)) {
         /* need to associate all interfaces */
         GHashTableIter iter;
@@ -482,15 +476,35 @@ void host_associateInterface(Host* host, Socket* socket, in_addr_t bindAddress,
 
         while(g_hash_table_iter_next(&iter, &key, &value)) {
             NetworkInterface* interface = value;
-            networkinterface_associate(interface, socket);
+            networkinterface_associateLegacySocket(interface, socket);
         }
     } else {
         NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_associate(interface, socket);
+        networkinterface_associateLegacySocket(interface, socket);
     }
 }
 
-void host_disassociateInterface(Host* host, Socket* socket) {
+void host_associateInterfaceSocketFile(Host* host, const SocketFile* socket, in_addr_t bindAddress) {
+    MAGIC_ASSERT(host);
+
+    /* associate the interfaces corresponding to bindAddress with socket */
+    if(bindAddress == htonl(INADDR_ANY)) {
+        /* need to associate all interfaces */
+        GHashTableIter iter;
+        gpointer key, value;
+        g_hash_table_iter_init(&iter, host->interfaces);
+
+        while(g_hash_table_iter_next(&iter, &key, &value)) {
+            NetworkInterface* interface = value;
+            networkinterface_associateSocketFile(interface, socket);
+        }
+    } else {
+        NetworkInterface* interface = host_lookupInterface(host, bindAddress);
+        networkinterface_associateSocketFile(interface, socket);
+    }
+}
+
+void host_disassociateInterfaceLegacySocket(Host* host, Socket* socket) {
     if(!socket || !socket_isBound(socket)) {
         return;
     }
@@ -506,12 +520,39 @@ void host_disassociateInterface(Host* host, Socket* socket) {
 
         while(g_hash_table_iter_next(&iter, &key, &value)) {
             NetworkInterface* interface = value;
-            networkinterface_disassociate(interface, socket);
+            networkinterface_disassociateLegacySocket(interface, socket);
         }
 
     } else {
         NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_disassociate(interface, socket);
+        networkinterface_disassociateLegacySocket(interface, socket);
+    }
+}
+
+void host_disassociateInterfaceSocketFile(Host* host, const SocketFile* socket) {
+    if(!socket) {
+        return;
+    }
+
+    in_addr_t bindAddress;
+    if(!socketfile_getSocketName(socket, &bindAddress, NULL)) {
+		return;
+	}
+
+    if(bindAddress == htonl(INADDR_ANY)) {
+        /* need to dissociate all interfaces */
+        GHashTableIter iter;
+        gpointer key, value;
+        g_hash_table_iter_init(&iter, host->interfaces);
+
+        while(g_hash_table_iter_next(&iter, &key, &value)) {
+            NetworkInterface* interface = value;
+            networkinterface_disassociateSocketFile(interface, socket);
+        }
+
+    } else {
+        NetworkInterface* interface = host_lookupInterface(host, bindAddress);
+        networkinterface_disassociateSocketFile(interface, socket);
     }
 }
 

@@ -39,6 +39,126 @@ struct _NetworkInterfaceTokenBucket {
     guint64 bytesRefill;
 };
 
+typedef enum _CompatSocketTypes CompatSocketTypes;
+enum _CompatSocketTypes {
+    CST_LEGACY_SOCKET,
+    CST_SOCKET_FILE,
+};
+
+typedef union _CompatSocketObject CompatSocketObject;
+union _CompatSocketObject {
+    Socket* as_legacy_socket;
+    SocketFile* as_socket_file;
+	void* as_void;
+};
+
+typedef struct _CompatSocket CompatSocket;
+struct _CompatSocket {
+    CompatSocketTypes type;
+    CompatSocketObject object;
+};
+
+static CompatSocket*
+_compatsocket_new(CompatSocketTypes type, CompatSocketObject object) {
+    if (type == CST_LEGACY_SOCKET) {
+        descriptor_ref(object.as_legacy_socket);
+    } else if (type == CST_SOCKET_FILE) {
+		object.as_socket_file = socketfile_cloneRef(object.as_socket_file);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+
+	warning("HERE1");
+
+    CompatSocket* socket = g_new(CompatSocket, 1);
+    socket->type = type;
+    socket->object = object;
+
+    return socket;
+}
+
+static void _compatsocket_free(CompatSocket* socket) {
+    if (socket == NULL) {
+        return;
+    }
+
+	//warning("Unrefed socket %p", socket->object);
+	warning("HERE2");
+
+    if (socket->type == CST_LEGACY_SOCKET) {
+        descriptor_unref((LegacyDescriptor*)socket->object.as_legacy_socket);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        socketfile_drop(socket->object.as_socket_file);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+
+    g_free(socket);
+}
+
+static void _compatsocket_freevoid(void* socket) { _compatsocket_free(socket); }
+
+static ProtocolType _compatsocket_getProtocol(CompatSocket* socket) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        return socket_getProtocol(socket->object.as_legacy_socket);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        return socketfile_getProtocol(socket->object.as_socket_file);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
+static bool _compatsocket_getPeerName(CompatSocket* socket, in_addr_t* ip, in_port_t* port) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        return socket_getPeerName(socket->object.as_legacy_socket, ip, port);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        return socketfile_getPeerName(socket->object.as_socket_file, ip, port);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
+static bool _compatsocket_getSocketName(CompatSocket* socket, in_addr_t* ip, in_port_t* port) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        return socket_getSocketName(socket->object.as_legacy_socket, ip, port);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        return socketfile_getSocketName(socket->object.as_socket_file, ip, port);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
+static const Packet* _compatsocket_peekNextOutPacket(CompatSocket* socket) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        return socket_peekNextOutPacket(socket->object.as_legacy_socket);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        return socketfile_peekNextOutPacket(socket->object.as_socket_file);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
+static void _compatsocket_pushInPacket(CompatSocket* socket, Packet* packet) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        socket_pushInPacket(socket->object.as_legacy_socket, packet);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        socketfile_pushInPacket(socket->object.as_socket_file, packet);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
+static Packet* _compatsocket_pullOutPacket(CompatSocket* socket) {
+	//warning("Pulled packed on socket %p", socket->object);
+    if (socket->type == CST_LEGACY_SOCKET) {
+        return socket_pullOutPacket(socket->object.as_legacy_socket);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        return socketfile_pullOutPacket(socket->object.as_socket_file);
+    } else {
+        error("Unexpected CompatSocket type");
+    }
+}
+
 struct _NetworkInterface {
     /* The upstream ISP router connected to this interface.
      * May be NULL for loopback interfaces. */
@@ -84,10 +204,21 @@ static void _networkinterface_sendPackets(NetworkInterface* interface);
 static void _networkinterface_refillTokenBucketsCB(NetworkInterface* interface,
                                                    gpointer userData);
 
-static gint _networkinterface_compareSocket(const Socket* sa, const Socket* sb, gpointer userData) {
-    Packet* pa = socket_peekNextOutPacket(sa);
-    Packet* pb = socket_peekNextOutPacket(sb);
-    return packet_getPriority(pa) > packet_getPriority(pb) ? +1 : -1;
+static gint _networkinterface_compareSocket(CompatSocket* sa, CompatSocket* sb, gpointer userData) {
+    const Packet* pa = _compatsocket_peekNextOutPacket(sa);
+    const Packet* pb = _compatsocket_peekNextOutPacket(sb);
+
+	if (pa == NULL) {
+		warning("Socket %p has no pending packets", sa->object);
+		return -1;
+	}
+
+	if (pb == NULL) {
+		warning("Socket %p has no pending packets", sb->object);
+		return +1;
+	}
+
+	return packet_getPriority(pa) > packet_getPriority(pb) ? +1 : -1;
 }
 
 static inline SimulationTime _networkinterface_getRefillInterval() {
@@ -266,18 +397,18 @@ static gchar* _networkinterface_getAssociationKey(NetworkInterface* interface,
     return g_string_free(strBuffer, FALSE);
 }
 
-static gchar* _networkinterface_socketToAssociationKey(NetworkInterface* interface, Socket* socket) {
+static gchar* _networkinterface_socketToAssociationKey(NetworkInterface* interface, CompatSocket* socket) {
     MAGIC_ASSERT(interface);
-
-    ProtocolType type = socket_getProtocol(socket);
+	
+	ProtocolType type = _compatsocket_getProtocol(socket);
 
     in_addr_t peerIP = 0;
     in_port_t peerPort = 0;
-    socket_getPeerName(socket, &peerIP, &peerPort);
+    _compatsocket_getPeerName(socket, &peerIP, &peerPort);
 
     in_addr_t boundIP = 0;
     in_port_t boundPort = 0;
-    socket_getSocketName(socket, &boundIP, &boundPort);
+    _compatsocket_getSocketName(socket, &boundIP, &boundPort);
 
     gchar* key = _networkinterface_getAssociationKey(interface, type, boundPort, peerIP, peerPort);
     return key;
@@ -291,14 +422,14 @@ gboolean networkinterface_isAssociated(NetworkInterface* interface, ProtocolType
 
     /* we need to check the general key too (ie the ones listening sockets use) */
     gchar* general = _networkinterface_getAssociationKey(interface, type, port, 0, 0);
-    if(g_hash_table_lookup(interface->boundSockets, general)) {
+    if(g_hash_table_contains(interface->boundSockets, general)) {
         isFound = TRUE;
     }
     g_free(general);
 
     if(!isFound) {
         gchar* specific = _networkinterface_getAssociationKey(interface, type, port, peerAddr, peerPort);
-        if(g_hash_table_lookup(interface->boundSockets, specific)) {
+        if(g_hash_table_contains(interface->boundSockets, specific)) {
             isFound = TRUE;
         }
         g_free(specific);
@@ -307,7 +438,7 @@ gboolean networkinterface_isAssociated(NetworkInterface* interface, ProtocolType
     return isFound;
 }
 
-void networkinterface_associate(NetworkInterface* interface, Socket* socket) {
+static void _networkinterface_associate(NetworkInterface* interface, CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
     gchar* key = _networkinterface_socketToAssociationKey(interface, socket);
@@ -315,14 +446,35 @@ void networkinterface_associate(NetworkInterface* interface, Socket* socket) {
     /* make sure there is no collision */
     utility_assert(!g_hash_table_contains(interface->boundSockets, key));
 
+    /* need to allocate our own memory for storage, and increment ref counts if needed */
+    socket = _compatsocket_new(socket->type, socket->object);
+
     /* insert to our storage, key is now owned by table */
     g_hash_table_replace(interface->boundSockets, key, socket);
-    descriptor_ref(socket);
+    //descriptor_ref(socket);
 
     debug("associated socket key %s", key);
 }
 
-void networkinterface_disassociate(NetworkInterface* interface, Socket* socket) {
+void networkinterface_associateLegacySocket(NetworkInterface* interface, Socket* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_LEGACY_SOCKET,
+		.object.as_legacy_socket = socket,
+	};
+
+	_networkinterface_associate(interface, &compatSocket);
+}
+
+void networkinterface_associateSocketFile(NetworkInterface* interface, const SocketFile* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_SOCKET_FILE,
+		.object.as_socket_file = socket,
+	};
+
+	_networkinterface_associate(interface, &compatSocket);
+}
+
+static void _networkinterface_disassociate(NetworkInterface* interface, CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
     gchar* key = _networkinterface_socketToAssociationKey(interface, socket);
@@ -332,6 +484,24 @@ void networkinterface_disassociate(NetworkInterface* interface, Socket* socket) 
 
     debug("disassociated socket key %s", key);
     g_free(key);
+}
+
+void networkinterface_disassociateLegacySocket(NetworkInterface* interface, Socket* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_LEGACY_SOCKET,
+		.object.as_legacy_socket = socket,
+	};
+
+	_networkinterface_disassociate(interface, &compatSocket);
+}
+
+void networkinterface_disassociateSocketFile(NetworkInterface* interface, const SocketFile* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_SOCKET_FILE,
+		.object.as_socket_file = socket,
+	};
+
+	_networkinterface_disassociate(interface, &compatSocket);
 }
 
 static void _networkinterface_capturePacket(NetworkInterface* interface, Packet* packet) {
@@ -388,7 +558,7 @@ static void _networkinterface_receivePacket(NetworkInterface* interface, Packet*
     /* the first check is for servers who don't associate with specific destinations */
     gchar* key = _networkinterface_getAssociationKey(interface, ptype, bindPort, 0, 0);
     debug("looking for socket associated with general key %s", key);
-    Socket* socket = g_hash_table_lookup(interface->boundSockets, key);
+    CompatSocket* socket = g_hash_table_lookup(interface->boundSockets, key);
     g_free(key);
 
     if(!socket) {
@@ -405,8 +575,11 @@ static void _networkinterface_receivePacket(NetworkInterface* interface, Packet*
     /* if the socket closed, just drop the packet */
     gint socketHandle = -1;
     if(socket) {
-        socketHandle = *descriptor_getHandleReference((LegacyDescriptor*)socket);
-        socket_pushInPacket(socket, packet);
+        if (socket->type == CST_LEGACY_SOCKET) {
+            socketHandle =
+                *descriptor_getHandleReference((LegacyDescriptor*)socket->object.as_legacy_socket);
+        }
+        _compatsocket_pushInPacket(socket, packet);
     } else {
         packet_addDeliveryStatus(packet, PDS_RCV_INTERFACE_DROPPED);
     }
@@ -454,11 +627,15 @@ void networkinterface_receivePackets(NetworkInterface* interface) {
     }
 }
 
-static void _networkinterface_updatePacketHeader(LegacyDescriptor* descriptor, Packet* packet) {
-    LegacyDescriptorType type = descriptor_getType(descriptor);
-    if(type == DT_TCPSOCKET) {
-        TCP* tcp = (TCP*)descriptor;
-        tcp_networkInterfaceIsAboutToSendPacket(tcp, packet);
+static void _networkinterface_updatePacketHeader(CompatSocket* socket, Packet* packet) {
+    if (socket->type == CST_LEGACY_SOCKET) {
+        LegacyDescriptor* descriptor = socket->object.as_legacy_socket;
+
+        LegacyDescriptorType type = descriptor_getType(descriptor);
+        if (type == DT_TCPSOCKET) {
+            TCP* tcp = (TCP*)descriptor;
+            tcp_networkInterfaceIsAboutToSendPacket(tcp, packet);
+        }
     }
 }
 
@@ -468,20 +645,24 @@ static Packet* _networkinterface_selectRoundRobin(NetworkInterface* interface, g
 
     while(!packet && !g_queue_is_empty(interface->rrQueue)) {
         /* do round robin to get the next packet from the next socket */
-        Socket* socket = g_queue_pop_head(interface->rrQueue);
-        packet = socket_pullOutPacket(socket);
-        *socketHandle = *descriptor_getHandleReference((LegacyDescriptor*)socket);
-
-        if(socket && packet) {
-            _networkinterface_updatePacketHeader((LegacyDescriptor*)socket, packet);
+        CompatSocket* socket = g_queue_pop_head(interface->rrQueue);
+        packet = _compatsocket_pullOutPacket(socket);
+        if (socket->type == CST_LEGACY_SOCKET) {
+            *socketHandle =
+                *descriptor_getHandleReference((LegacyDescriptor*)socket->object.as_legacy_socket);
         }
 
-        if(socket_peekNextOutPacket(socket)) {
+        if(socket && packet) {
+            _networkinterface_updatePacketHeader(socket, packet);
+        }
+
+        if(_compatsocket_peekNextOutPacket(socket)) {
             /* socket has more packets, and is still reffed from before */
             g_queue_push_tail(interface->rrQueue, socket);
         } else {
             /* socket has no more packets, unref it from the sendable queue */
-            descriptor_unref((LegacyDescriptor*) socket);
+			_compatsocket_free(socket);
+            //descriptor_unref((LegacyDescriptor*) socket);
         }
     }
 
@@ -496,20 +677,26 @@ static Packet* _networkinterface_selectFirstInFirstOut(NetworkInterface* interfa
 
     while(!packet && !priorityqueue_isEmpty(interface->fifoQueue)) {
         /* do fifo to get the next packet from the next socket */
-        Socket* socket = priorityqueue_pop(interface->fifoQueue);
-        packet = socket_pullOutPacket(socket);
-        *socketHandle = *descriptor_getHandleReference((LegacyDescriptor*)socket);
-
-        if(socket && packet) {
-            _networkinterface_updatePacketHeader((LegacyDescriptor*)socket, packet);
+        CompatSocket* socket = priorityqueue_pop(interface->fifoQueue);
+		//warning("Removed socket %p", socket->object);
+        packet = _compatsocket_pullOutPacket(socket);
+        if (socket->type == CST_LEGACY_SOCKET) {
+            *socketHandle =
+                *descriptor_getHandleReference((LegacyDescriptor*)socket->object.as_legacy_socket);
         }
 
-        if(socket_peekNextOutPacket(socket)) {
+        if(socket && packet) {
+            _networkinterface_updatePacketHeader(socket, packet);
+        }
+
+        if(_compatsocket_peekNextOutPacket(socket) != NULL) {
             /* socket has more packets, and is still reffed from before */
             priorityqueue_push(interface->fifoQueue, socket);
+			//warning("Added socket %p", socket->object);
         } else {
             /* socket has no more packets, unref it from the sendable queue */
-            descriptor_unref((LegacyDescriptor*) socket);
+			_compatsocket_free(socket);
+            //descriptor_unref((LegacyDescriptor*) socket);
         }
     }
 
@@ -578,23 +765,58 @@ static void _networkinterface_sendPackets(NetworkInterface* interface) {
     }
 }
 
-void networkinterface_wantsSend(NetworkInterface* interface, Socket* socket) {
+static guint _compatsocket_hash(gconstpointer key) {
+    CompatSocket* socket = key;
+    return g_direct_hash((gconstpointer)socket->object.as_void);
+}
+
+static gboolean _compatsocket_equal(gconstpointer a, gconstpointer b) {
+    CompatSocket* sa = a;
+    CompatSocket* sb = b;
+
+	return sa->object.as_void == sb->object.as_void;
+}
+
+static gint _compatsocket_compare(gconstpointer a, gconstpointer b) {
+    CompatSocket* sa = a;
+    CompatSocket* sb = b;
+
+    if (sa < sb) {
+        return -1;
+    } else if (sa > sb) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static void _networkinterface_wantsSend(NetworkInterface* interface, CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
+	if (_compatsocket_peekNextOutPacket(socket) == NULL) {
+		warning("Socket %p wants send, but no packets available", socket->object);
+		return;
+	}
+    
     /* track the new socket for sending if not already tracking */
     switch(interface->qdisc) {
         case QDISC_MODE_RR: {
-            if(!g_queue_find(interface->rrQueue, socket)) {
-                descriptor_ref(socket);
-                g_queue_push_tail(interface->rrQueue, socket);
+            if(!g_queue_find_custom(interface->rrQueue, socket, _compatsocket_compare)) {
+				//if (socket->type == CST_LEGACY_SOCKET) {
+                //    descriptor_ref(socket->object.as_legacy_socket);
+				//}
+                g_queue_push_tail(interface->rrQueue, _compatsocket_new(socket->type, socket->object));
             }
             break;
         }
         case QDISC_MODE_FIFO:
         default: {
             if(!priorityqueue_find(interface->fifoQueue, socket)) {
-                descriptor_ref(socket);
-                priorityqueue_push(interface->fifoQueue, socket);
+				//if (socket->type == CST_LEGACY_SOCKET) {
+                //    descriptor_ref(socket->object.as_legacy_socket);
+				//}
+                priorityqueue_push(interface->fifoQueue, _compatsocket_new(socket->type, socket->object));
+				//warning("Added socket %p", socket->object);
             }
             break;
         }
@@ -602,6 +824,24 @@ void networkinterface_wantsSend(NetworkInterface* interface, Socket* socket) {
 
     /* send packets if we can */
     _networkinterface_sendPackets(interface);
+}
+
+void networkinterface_legacySocketWantsSend(NetworkInterface* interface, Socket* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_LEGACY_SOCKET,
+		.object.as_legacy_socket = socket,
+	};
+
+	_networkinterface_wantsSend(interface, &compatSocket);
+}
+
+void networkinterface_socketFileWantsSend(NetworkInterface* interface, const SocketFile* socket) {
+	CompatSocket compatSocket = {
+		.type = CST_SOCKET_FILE,
+		.object.as_socket_file = socket,
+	};
+
+	_networkinterface_wantsSend(interface, &compatSocket);
 }
 
 void networkinterface_setRouter(NetworkInterface* interface, Router* router) {
@@ -629,11 +869,14 @@ NetworkInterface* networkinterface_new(Address* address, guint64 bwDownKiBps, gu
     address_ref(interface->address);
 
     /* incoming packets get passed along to sockets */
-    interface->boundSockets = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, descriptor_unref);
+    interface->boundSockets =
+        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, _compatsocket_freevoid);
 
     /* sockets tell us when they want to start sending */
     interface->rrQueue = g_queue_new();
-    interface->fifoQueue = priorityqueue_new((GCompareDataFunc)_networkinterface_compareSocket, NULL, descriptor_unref);
+    interface->fifoQueue =
+        priorityqueue_new_full((GCompareDataFunc)_networkinterface_compareSocket, NULL,
+                               _compatsocket_hash, _compatsocket_equal, _compatsocket_freevoid);
 
     /* parse queuing discipline */
     interface->qdisc = (qdisc == QDISC_MODE_NONE) ? QDISC_MODE_FIFO : qdisc;
@@ -663,8 +906,9 @@ void networkinterface_free(NetworkInterface* interface) {
 
     /* unref all sockets wanting to send */
     while(interface->rrQueue && !g_queue_is_empty(interface->rrQueue)) {
-        Socket* socket = g_queue_pop_head(interface->rrQueue);
-        descriptor_unref(socket);
+        CompatSocket* socket = g_queue_pop_head(interface->rrQueue);
+		_compatsocket_free(socket);
+        //descriptor_unref(socket);
     }
     g_queue_free(interface->rrQueue);
 

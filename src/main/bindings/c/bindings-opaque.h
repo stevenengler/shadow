@@ -35,4 +35,6 @@ typedef struct MemoryManager MemoryManager;
 // Represents a POSIX description, or a Linux "struct file".
 typedef struct PosixFile PosixFile;
 
+typedef struct SocketFile SocketFile;
+
 #endif /* main_opaque_bindings_h */

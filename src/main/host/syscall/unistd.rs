@@ -16,7 +16,7 @@ use log::*;
 pub fn close(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallReturn {
     let fd = unsafe { args.args[0].as_i64 } as libc::c_int;
 
-    debug!("Trying to close fd {}", fd);
+    let mut result = None;
 
     // scope used to make sure that desc cannot be used after deregistering it
     {
@@ -27,19 +27,47 @@ pub fn close(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallRe
         };
 
         // if it's a legacy descriptor, use the C syscall handler instead
-        if let CompatDescriptor::Legacy(_) = desc {
-            return unsafe {
-                c::syscallhandler_close(
+        let desc = match desc {
+            CompatDescriptor::New(d) => d,
+            CompatDescriptor::Legacy(_) => unsafe {
+                return c::syscallhandler_close(
                     sys as *mut c::SysCallHandler,
                     args as *const c::SysCallArgs,
-                )
-            };
+                );
+            },
+        };
+
+        debug!("Trying to close fd {}", fd);
+
+        // if this is the last remaining descriptor
+        if desc.get_fd_count() == 1 {
+            let posix_file = desc.get_file();
+
+            result = Some(EventQueue::queue_and_run(|event_queue| {
+                posix_file.borrow_mut().close(event_queue)
+            }));
+
+            //if posix_file.borrow().status() == FileStatus::CLOSED {
+            if let PosixFile::Socket(socket) = posix_file {
+                //let socket_ptr = Box::into_raw(Box::new(socket.clone()));
+                //unsafe { c::host_disassociateInterfaceSocketFile(sys.host, socket_ptr) };
+                unsafe { c::host_disassociateInterfaceSocketFile(sys.host, socket as *const _) };
+            }
+            //}
+
+            // TODO: need to disassociate sockets from the network interface... where should we do this?
         }
     }
 
+    // according to "man 2 close", in Linux any errors that may occur will happen after the fd is
+    // released, so we should always deregister the descriptor
     unsafe { c::process_deregisterCompatDescriptor(sys.process, fd) };
 
-    SyscallReturn::Success(0).into()
+    if let Some(result) = result {
+        result.into()
+    } else {
+        SyscallReturn::Success(0).into()
+    }
 }
 
 pub fn dup(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallReturn {
@@ -209,6 +237,23 @@ fn write_helper(
     let result =
         EventQueue::queue_and_run(|event_queue| posix_file.borrow_mut().write(&buf, event_queue));
 
+    if let PosixFile::Socket(socket) = posix_file {
+        let bound_addr = socket.borrow().get_bound_address();
+
+        if let Some(nix::sys::socket::SockAddr::Inet(bound_addr)) = bound_addr {
+            match bound_addr.ip() {
+                nix::sys::socket::IpAddr::V4(bound_addr) => {
+                    let bound_addr = u32::from_be_bytes(bound_addr.octets()).to_be();
+                    let interface = unsafe { c::host_lookupInterface(sys.host, bound_addr) };
+                    unsafe {
+                        c::networkinterface_socketFileWantsSend(interface, socket as *const _)
+                    };
+                }
+                _ => unimplemented!(),
+            }
+        }
+    }
+
     // if the syscall would block and it's a blocking descriptor
     if result == SyscallReturn::Error(nix::errno::EWOULDBLOCK)
         && !file_flags.contains(FileFlags::NONBLOCK)
@@ -300,6 +345,7 @@ fn pipe_helper(sys: &mut c::SysCallHandler, fd_ptr: c::PluginPtr, flags: i32) ->
     let fd_ptr =
         unsafe { c::process_getWriteablePtr(sys.process, sys.thread, fd_ptr, size_needed as u64) };
     let fds = unsafe { std::slice::from_raw_parts_mut(fd_ptr as *mut libc::c_int, num_items) };
+    // TODO: go through all uses of from_raw_parts and make sure we never pass a null pointer
 
     fds[0] = unsafe {
         c::process_registerCompatDescriptor(

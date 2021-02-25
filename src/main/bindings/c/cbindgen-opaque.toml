@@ -13,6 +13,6 @@ no_includes = true
 
 [export]
 # Avoid exporting C types back through again.
-exclude = ["PluginPtr", "SysCallReg"]
+exclude = ["PluginPtr", "SysCallReg", "Packet"]
 # Generate only opaque types
 item_types = ["opaque"]

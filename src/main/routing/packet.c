@@ -17,6 +17,9 @@
 #include "support/logger/log_level.h"
 #include "support/logger/logger.h"
 
+#include <pthread.h>
+#include "main/core/logger/shadow_logger.h"
+
 /* thread-safe structure representing a data/network packet */
 
 typedef struct _PacketLocalHeader PacketLocalHeader;
@@ -187,14 +190,23 @@ static void _packet_free(Packet* packet) {
 }
 
 void packet_ref(Packet* packet) {
+	//warning("Ref packet %p", packet);
+	//shadow_logger_flushRecords(shadow_logger_getDefault(), pthread_self());
+	//shadow_logger_syncToDisk(shadow_logger_getDefault());
     MAGIC_ASSERT(packet);
     (packet->referenceCount)++;
 }
 
 void packet_unref(Packet* packet) {
+	//warning("Unref packet %p", packet);
+	//shadow_logger_flushRecords(shadow_logger_getDefault(), pthread_self());
+	//shadow_logger_syncToDisk(shadow_logger_getDefault());
     MAGIC_ASSERT(packet);
     (packet->referenceCount)--;
     if(packet->referenceCount == 0) {
+		//warning("Freeing packet %p", packet);
+		//shadow_logger_flushRecords(shadow_logger_getDefault(), pthread_self());
+		//shadow_logger_syncToDisk(shadow_logger_getDefault());
         packet_addDeliveryStatus(packet, PDS_DESTROYED);
         _packet_free(packet);
     }
@@ -310,7 +322,7 @@ guint packet_getPayloadLength(Packet* packet) {
     }
 }
 
-gdouble packet_getPriority(Packet* packet) {
+gdouble packet_getPriority(const Packet* packet) {
     MAGIC_ASSERT(packet);
     return packet->priority;
 }

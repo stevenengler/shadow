@@ -178,6 +178,11 @@ fn get_tests() -> Vec<test_utils::ShadowTest<(), String>> {
                     move || test_tcp_info(domain, sock_type),
                     set![TestEnv::Libc, TestEnv::Shadow],
                 ),
+                test_utils::ShadowTest::new(
+                    &append_args("test_so_sndbuf_with_large_send"),
+                    move || test_so_sndbuf_with_large_send(domain, sock_type),
+                    set![TestEnv::Libc, TestEnv::Shadow],
+                ),
             ];
 
             tests.extend(more_tests);
@@ -520,6 +525,231 @@ fn test_so_sndbuf(domain: libc::c_int, sock_type: libc::c_int) -> Result<(), Str
     })
 }
 
+/// A helper function for TCP sockets to start a server on one fd and connect another fd
+/// to it. Returns the accepted fd.
+fn tcp_connect_helper(
+    fd_client: libc::c_int,
+    fd_server: libc::c_int,
+    flags: libc::c_int,
+) -> libc::c_int {
+    // the server address
+    let mut server_addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as u16,
+        sin_port: 0u16.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: libc::INADDR_LOOPBACK.to_be(),
+        },
+        sin_zero: [0; 8],
+    };
+
+    // bind on the server address
+    {
+        let rv = unsafe {
+            libc::bind(
+                fd_server,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of_val(&server_addr) as u32,
+            )
+        };
+        assert_eq!(rv, 0);
+    }
+
+    // get the assigned port number
+    {
+        let mut server_addr_size = std::mem::size_of_val(&server_addr) as u32;
+        let rv = unsafe {
+            libc::getsockname(
+                fd_server,
+                &mut server_addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+                &mut server_addr_size as *mut libc::socklen_t,
+            )
+        };
+        assert_eq!(rv, 0);
+        assert_eq!(server_addr_size, std::mem::size_of_val(&server_addr) as u32);
+    }
+
+    // listen for connections
+    {
+        let rv = unsafe { libc::listen(fd_server, 10) };
+        assert_eq!(rv, 0);
+    }
+
+    // connect to the server address
+    {
+        let rv = unsafe {
+            libc::connect(
+                fd_client,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of_val(&server_addr) as u32,
+            )
+        };
+        assert!(rv == 0 || (rv == -1 && test_utils::get_errno() == libc::EINPROGRESS));
+    }
+
+    // shadow needs to run events, otherwise the accept call won't know it
+    // has an incoming connection (SYN packet)
+    {
+        let rv = unsafe { libc::usleep(10000) };
+        assert_eq!(rv, 0);
+    }
+
+    // accept the connection
+    let fd = unsafe { libc::accept4(fd_server, std::ptr::null_mut(), std::ptr::null_mut(), flags) };
+    assert!(fd >= 0);
+
+    fd
+}
+
+/// A helper function for UDP sockets to bind the server fd and optionally connect
+/// the client fd to the server fd. Returns the address that the server is bound to.
+fn udp_connect_helper(
+    fd_client: libc::c_int,
+    fd_server: libc::c_int,
+    connect: bool,
+) -> libc::sockaddr_in {
+    // the server address
+    let mut server_addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as u16,
+        sin_port: 0u16.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: libc::INADDR_LOOPBACK.to_be(),
+        },
+        sin_zero: [0; 8],
+    };
+
+    // bind on the server address
+    {
+        let rv = unsafe {
+            libc::bind(
+                fd_server,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of_val(&server_addr) as u32,
+            )
+        };
+        assert_eq!(rv, 0);
+    }
+
+    // get the assigned port number
+    {
+        let mut server_addr_size = std::mem::size_of_val(&server_addr) as u32;
+        let rv = unsafe {
+            libc::getsockname(
+                fd_server,
+                &mut server_addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+                &mut server_addr_size as *mut libc::socklen_t,
+            )
+        };
+        assert_eq!(rv, 0);
+        assert_eq!(server_addr_size, std::mem::size_of_val(&server_addr) as u32);
+    }
+
+    // connect to the server address
+    if connect {
+        let rv = unsafe {
+            libc::connect(
+                fd_client,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of_val(&server_addr) as u32,
+            )
+        };
+        assert_eq!(rv, 0);
+    }
+
+    server_addr
+}
+
+/// Test getsockopt() and setsockopt() using the SO_SNDBUF option while sending more data.
+fn test_so_sndbuf_with_large_send(
+    domain: libc::c_int,
+    sock_type: libc::c_int,
+) -> Result<(), String> {
+    let fd_server = unsafe { libc::socket(domain, sock_type | libc::SOCK_NONBLOCK, 0) };
+    let fd_client = unsafe { libc::socket(domain, sock_type | libc::SOCK_NONBLOCK, 0) };
+    assert!(fd_server >= 0);
+    assert!(fd_client >= 0);
+    
+    // connect the client fd to the server
+    let fd_server = match sock_type {
+        libc::SOCK_STREAM => {
+            let fd_accepted = tcp_connect_helper(fd_client, fd_server, libc::SOCK_NONBLOCK);
+            unsafe { libc::close(fd_server) };
+            fd_accepted
+        }
+        libc::SOCK_DGRAM => {
+            udp_connect_helper(fd_client, fd_server, /* connect= */ true);
+            fd_server
+        }
+        _ => unreachable!(),
+    };
+
+    let level = libc::SOL_SOCKET;
+    let optname = libc::SO_SNDBUF;
+
+    let size = nix::sys::socket::getsockopt(fd_server, nix::sys::socket::sockopt::RcvBuf).unwrap();
+    println!("Receive size: {:?}", size);
+
+    test_utils::run_and_close_fds(&[fd_client, fd_server], || {
+        let size = nix::sys::socket::getsockopt(fd_client, nix::sys::socket::sockopt::SndBuf).unwrap();
+        println!("Before Before size: {:?}", size);
+
+        //nix::sys::socket::setsockopt(fd_client, nix::sys::socket::sockopt::SndBuf, &2048).unwrap();
+        nix::sys::socket::setsockopt(fd_server, nix::sys::socket::sockopt::RcvBuf, &(33000)).unwrap();
+        let size = nix::sys::socket::getsockopt(fd_server, nix::sys::socket::sockopt::RcvBuf).unwrap();
+        println!("Before Receive size: {:?}", size);
+        
+        let size = nix::sys::socket::getsockopt(fd_client, nix::sys::socket::sockopt::SndBuf).unwrap();
+        println!("Before size: {:?}", size);
+
+        let bytes = vec![0u8; 65000];
+
+        {
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+        }
+
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        {
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+        }
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        {
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+            let rv = unsafe { libc::usleep(10000) };
+            assert_eq!(rv, 0);
+        }
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        let sent = nix::sys::socket::send(fd_client, &bytes, nix::sys::socket::MsgFlags::empty()).unwrap();
+        
+        let size = nix::sys::socket::getsockopt(fd_client, nix::sys::socket::sockopt::SndBuf).unwrap();
+        println!("After size: {:?}", size);
+        println!("Sent: {:?}", sent);
+
+        let mut bytes2 = vec![0u8; 65000];
+        let read = nix::sys::socket::recv(fd_server, &mut bytes2, nix::sys::socket::MsgFlags::empty()).unwrap();
+        println!("Read: {:?}", read);
+        let read = nix::sys::socket::recv(fd_server, &mut bytes2, nix::sys::socket::MsgFlags::empty()).unwrap();
+        println!("Read: {:?}", read);
+        let size = nix::sys::socket::getsockopt(fd_server, nix::sys::socket::sockopt::RcvBuf).unwrap();
+        println!("After receive size: {:?}", size);
+        
+        Ok(())
+    })
+}
+
 /// Test getsockopt() and setsockopt() using the SO_RCVBUF option.
 fn test_so_rcvbuf(domain: libc::c_int, sock_type: libc::c_int) -> Result<(), String> {
     let fd = unsafe { libc::socket(domain, sock_type, 0) };
@@ -527,7 +757,7 @@ fn test_so_rcvbuf(domain: libc::c_int, sock_type: libc::c_int) -> Result<(), Str
 
     let level = libc::SOL_SOCKET;
     let optname = libc::SO_RCVBUF;
-    let optvals = [0i32, 512, 1000, 2000, 8192, 16_384];
+    let optvals = [0i32, 512, 1000, 2000, 8192, 16_384, -1];
 
     test_utils::run_and_close_fds(&[fd], || {
         for &optval in &optvals {

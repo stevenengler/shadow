@@ -216,14 +216,14 @@ SysCallReturn syscallhandler_make_syscall(SysCallHandler* sys,
     }
 
     switch (args->number) {
-        HANDLE(accept);
-        HANDLE(accept4);
-        HANDLE(bind);
+        HANDLE_RUST(accept);
+        HANDLE_RUST(accept4);
+        HANDLE_RUST(bind);
         HANDLE(brk);
         HANDLE(clock_gettime);
         HANDLE(clone);
         HANDLE_RUST(close);
-        HANDLE(connect);
+        HANDLE_RUST(connect);
         HANDLE(creat);
         HANDLE_RUST(dup);
         HANDLE(epoll_create);
@@ -259,19 +259,19 @@ SysCallReturn syscallhandler_make_syscall(SysCallHandler* sys,
         HANDLE(futimesat);
         HANDLE(getdents);
         HANDLE(getdents64);
-        HANDLE(getpeername);
+        HANDLE_RUST(getpeername);
         HANDLE(getpid);
         HANDLE(getppid);
         HANDLE(gettid);
         HANDLE(getrandom);
         HANDLE(get_robust_list);
-        HANDLE(getsockname);
-        HANDLE(getsockopt);
+        HANDLE_RUST(getsockname);
+        HANDLE_RUST(getsockopt);
         HANDLE(gettimeofday);
         HANDLE(ioctl);
         HANDLE(kill);
         HANDLE(linkat);
-        HANDLE(listen);
+        HANDLE_RUST(listen);
         HANDLE(lseek);
         HANDLE(mkdirat);
         HANDLE(mknodat);
@@ -311,15 +311,15 @@ SysCallReturn syscallhandler_make_syscall(SysCallHandler* sys,
         HANDLE(readahead);
         HANDLE(readlinkat);
         HANDLE(readv);
-        HANDLE(recvfrom);
+        HANDLE_RUST(recvfrom);
         HANDLE(renameat);
         HANDLE(renameat2);
-        HANDLE(sendto);
-        HANDLE(setsockopt);
+        HANDLE_RUST(sendto);
+        HANDLE_RUST(setsockopt);
         HANDLE(set_robust_list);
         HANDLE(set_tid_address);
-        HANDLE(shutdown);
-        HANDLE(socket);
+        HANDLE_RUST(shutdown);
+        HANDLE_RUST(socket);
         HANDLE(socketpair);
 #ifdef SYS_statx
         HANDLE(statx);

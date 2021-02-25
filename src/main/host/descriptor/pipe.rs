@@ -69,14 +69,18 @@ impl PipeFile {
         }
     }
 
+    pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn {
+        // TODO: do we want to do anything here?
+        SyscallReturn::Success(0)
+    }
+
     pub fn enable_notifications(arc: &Arc<AtomicRefCell<Self>>) {
         let weak = Arc::downgrade(arc);
         let pipe = &mut *arc.borrow_mut();
 
         // remove any status flags that aren't relevant to us
-        let monitoring = pipe.filter_status(
-            FileStatus::CLOSED | FileStatus::READABLE | FileStatus::WRITABLE,
-        );
+        let monitoring =
+            pipe.filter_status(FileStatus::CLOSED | FileStatus::READABLE | FileStatus::WRITABLE);
 
         let handle = pipe.buffer.borrow_mut().add_listener(
             monitoring,
@@ -84,7 +88,8 @@ impl PipeFile {
             move |status, _changed, event_queue| {
                 // if the file hasn't been dropped
                 if let Some(pipe) = weak.upgrade() {
-                    pipe.borrow_mut().copy_status(monitoring, status, event_queue)
+                    pipe.borrow_mut()
+                        .copy_status(monitoring, status, event_queue)
                 }
             },
         );

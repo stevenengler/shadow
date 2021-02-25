@@ -16,12 +16,32 @@
 #include <stdlib.h>
 #include "main/bindings/c/bindings-opaque.h"
 #include "main/host/descriptor/descriptor_types.h"
+#include "main/host/protocol.h"
 #include "main/host/status_listener.h"
 #include "main/host/syscall_handler.h"
 #include "main/host/syscall_types.h"
 #include "main/host/thread.h"
+#include "main/routing/packet.h"
 
 void rust_logging_init(void);
+
+// Decrement the ref count of the posix file object. The pointer must not be used after
+// calling this function.
+void socketfile_drop(const SocketFile *file);
+
+const SocketFile *socketfile_cloneRef(const SocketFile *file);
+
+ProtocolType socketfile_getProtocol(const SocketFile *socket);
+
+bool socketfile_getPeerName(const SocketFile *socket, in_addr_t *ip_ptr, in_port_t *port_ptr);
+
+bool socketfile_getSocketName(const SocketFile *socket, in_addr_t *ip_ptr, in_port_t *port_ptr);
+
+const Packet *socketfile_peekNextOutPacket(const SocketFile *socket);
+
+void socketfile_pushInPacket(const SocketFile *socket, Packet *packet);
+
+const Packet *socketfile_pullOutPacket(const SocketFile *socket);
 
 // The new compat descriptor takes ownership of the reference to the legacy descriptor and
 // does not increment its ref count, but will decrement the ref count when this compat
@@ -136,6 +156,32 @@ SysCallReg memorymanager_handleMprotect(MemoryManager *memory_manager,
                                         PluginPtr addr,
                                         uintptr_t size,
                                         int32_t prot);
+
+SysCallReturn rustsyscallhandler_socket(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_bind(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_recvfrom(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_sendto(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_connect(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_getsockname(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_getpeername(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_listen(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_accept(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_accept4(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_shutdown(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_getsockopt(SysCallHandler *sys, const SysCallArgs *args);
+
+SysCallReturn rustsyscallhandler_setsockopt(SysCallHandler *sys, const SysCallArgs *args);
 
 SysCallReturn rustsyscallhandler_close(SysCallHandler *sys, const SysCallArgs *args);
 

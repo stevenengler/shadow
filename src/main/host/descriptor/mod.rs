@@ -4,7 +4,10 @@ use std::sync::Arc;
 use crate::cshadow as c;
 use crate::utility::event_queue::{EventQueue, EventSource, Handle};
 
+use socket::{SocketFile, SocketFileRef, SocketFileRefMut};
+
 pub mod pipe;
+pub mod socket;
 
 /// A trait we can use as a compile-time check to make sure that an object is Send.
 trait IsSend: Send {}
@@ -254,6 +257,7 @@ impl StatusEventSource {
 #[derive(Clone)]
 pub enum PosixFile {
     Pipe(Arc<AtomicRefCell<pipe::PipeFile>>),
+    Socket(SocketFile),
 }
 
 // will not compile if `PosixFile` is not Send + Sync
@@ -264,40 +268,47 @@ impl PosixFile {
     pub fn borrow(&self) -> PosixFileRef {
         match self {
             Self::Pipe(ref f) => PosixFileRef::Pipe(f.borrow()),
+            Self::Socket(ref f) => PosixFileRef::Socket(f.borrow()),
         }
     }
 
     pub fn borrow_mut(&self) -> PosixFileRefMut {
         match self {
             Self::Pipe(ref f) => PosixFileRefMut::Pipe(f.borrow_mut()),
+            Self::Socket(ref f) => PosixFileRefMut::Socket(f.borrow_mut()),
         }
     }
 
     pub fn canonical_handle(&self) -> usize {
         match self {
             Self::Pipe(f) => Arc::as_ptr(f) as usize,
+            Self::Socket(f) => f.canonical_handle(),
         }
     }
 }
 
 pub enum PosixFileRef<'a> {
     Pipe(atomic_refcell::AtomicRef<'a, pipe::PipeFile>),
+    Socket(SocketFileRef<'a>),
 }
 
 pub enum PosixFileRefMut<'a> {
     Pipe(atomic_refcell::AtomicRefMut<'a, pipe::PipeFile>),
+    Socket(SocketFileRefMut<'a>),
 }
 
 impl PosixFileRef<'_> {
     pub fn status(&self) -> FileStatus {
         match self {
             Self::Pipe(ref f) => f.status(),
+            Self::Socket(ref f) => f.status(),
         }
     }
 
     pub fn get_flags(&self) -> FileFlags {
         match self {
             Self::Pipe(f) => f.get_flags(),
+            Self::Socket(f) => f.get_flags(),
         }
     }
 }
@@ -306,45 +317,134 @@ impl PosixFileRefMut<'_> {
     pub fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn {
         match self {
             Self::Pipe(ref mut f) => f.read(bytes, event_queue),
+            Self::Socket(ref mut f) => f.read(bytes, event_queue),
         }
     }
 
     pub fn write(&mut self, bytes: &[u8], event_queue: &mut EventQueue) -> SyscallReturn {
         match self {
             Self::Pipe(ref mut f) => f.write(bytes, event_queue),
+            Self::Socket(ref mut f) => f.write(bytes, event_queue),
+        }
+    }
+
+    pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn {
+        match self {
+            Self::Pipe(ref mut f) => f.close(event_queue),
+            Self::Socket(ref mut f) => f.close(event_queue),
         }
     }
 
     pub fn status(&self) -> FileStatus {
         match self {
             Self::Pipe(ref f) => f.status(),
+            Self::Socket(ref f) => f.status(),
         }
     }
 
     pub fn get_flags(&self) -> FileFlags {
         match self {
             Self::Pipe(f) => f.get_flags(),
+            Self::Socket(f) => f.get_flags(),
         }
     }
 
     pub fn set_flags(&mut self, flags: FileFlags) {
         match self {
             Self::Pipe(f) => f.set_flags(flags),
+            Self::Socket(f) => f.set_flags(flags),
         }
     }
 
     pub fn add_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
         match self {
             Self::Pipe(f) => f.add_legacy_listener(ptr),
+            Self::Socket(f) => f.add_legacy_listener(ptr),
         }
     }
 
     pub fn remove_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
         match self {
             Self::Pipe(f) => f.remove_legacy_listener(ptr),
+            Self::Socket(f) => f.remove_legacy_listener(ptr),
         }
     }
 }
+
+/*
+pub trait Things {
+    fn status(&self) -> FileStatus;
+}
+
+pub trait MutThings {
+    fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn;
+    fn write(&mut self, bytes: &[u8], event_queue: &mut EventQueue) -> SyscallReturn;
+}
+
+#[deny(unconditional_recursion)]
+impl Things for PosixFileRef<'_> {
+    fn status(&self) -> FileStatus {
+        self.status()
+    }
+}
+
+#[deny(unconditional_recursion)]
+impl Things for PosixFileRefMut<'_> {
+    fn status(&self) -> FileStatus {
+        self.status()
+    }
+}
+
+#[deny(unconditional_recursion)]
+impl MutThings for PosixFileRefMut<'_> {
+    fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn {
+        self.read(bytes, event_queue)
+    }
+
+    fn write(&mut self, bytes: &[u8], event_queue: &mut EventQueue) -> SyscallReturn {
+        self.write(bytes, event_queue)
+    }
+}
+*/
+
+//pub enum Test<'a> {
+//    Pipe(&'a pipe::PipeFile),
+//}
+
+/*
+pub fn my_func(f: PosixFile) {
+    // can pattern match at the top level if you need the Arc
+    if let PosixFile::Pipe(ref p) = f {
+        p.borrow().status();
+    }
+
+    let mut f = f.borrow_mut();
+
+    // can call functions directly on the borrowed reference
+    let buf = [0u8; 10];
+    EventQueue::queue_and_run(|event_queue| {
+        f.write(&buf, event_queue);
+    });
+
+    // can pattern match on the borrowed reference
+    if let PosixFileRefMut::Pipe(p) = f {
+        p.status();
+    }
+}
+
+pub fn test(f: PosixFile) -> FileStatus {
+    let mut f = f.borrow_mut();
+
+    let buf = [0u8; 10];
+    f.write(&buf, &mut EventQueue::new());
+
+    if let PosixFileRefMut::Pipe(p) = f {
+        p.status()
+    } else {
+        unreachable!()
+    }
+}
+*/
 
 bitflags::bitflags! {
     // Linux only supports a single descriptor flag:
@@ -358,6 +458,7 @@ bitflags::bitflags! {
 pub struct Descriptor {
     file: PosixFile,
     flags: DescriptorFlags,
+    count: Arc<()>,
 }
 
 impl Descriptor {
@@ -365,6 +466,7 @@ impl Descriptor {
         Self {
             file,
             flags: DescriptorFlags::empty(),
+            count: Arc::new(()),
         }
     }
 
@@ -378,6 +480,10 @@ impl Descriptor {
 
     pub fn set_flags(&mut self, flags: DescriptorFlags) {
         self.flags = flags;
+    }
+
+    pub fn get_fd_count(&self) -> usize {
+        Arc::<()>::strong_count(&self.count)
     }
 }
 

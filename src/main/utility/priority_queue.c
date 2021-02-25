@@ -24,18 +24,24 @@ struct _PriorityQueue {
     GDestroyNotify freeFunc;
 };
 
-PriorityQueue* priorityqueue_new(GCompareDataFunc compareFunc,
-        gpointer compareData, GDestroyNotify freeFunc) {
+PriorityQueue* priorityqueue_new_full(GCompareDataFunc compareFunc, gpointer compareData,
+                                      GHashFunc hashFunc, GEqualFunc equalFunc,
+                                      GDestroyNotify freeFunc) {
     utility_assert(compareFunc);
-    PriorityQueue *q = g_slice_new(PriorityQueue);
+    PriorityQueue* q = g_slice_new(PriorityQueue);
     q->heap = g_new(gpointer, INITIAL_SIZE);
-    q->map = g_hash_table_new(NULL, NULL);
+    q->map = g_hash_table_new(hashFunc, equalFunc);
     q->size = 0;
     q->heapSize = INITIAL_SIZE;
     q->compareFunc = compareFunc;
     q->compareData = compareData;
     q->freeFunc = freeFunc;
     return q;
+}
+
+PriorityQueue* priorityqueue_new(GCompareDataFunc compareFunc, gpointer compareData,
+                                 GDestroyNotify freeFunc) {
+    return priorityqueue_new_full(compareFunc, compareData, NULL, NULL, freeFunc);
 }
 
 void priorityqueue_clear(PriorityQueue *q) {

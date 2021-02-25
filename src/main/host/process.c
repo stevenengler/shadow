@@ -785,7 +785,7 @@ void process_deregisterLegacyDescriptor(Process* proc, LegacyDescriptor* desc) {
     if (desc) {
         LegacyDescriptorType dType = descriptor_getType(desc);
         if (dType == DT_TCPSOCKET || dType == DT_UDPSOCKET) {
-            host_disassociateInterface(proc->host, (Socket*)desc);
+            host_disassociateInterfaceLegacySocket(proc->host, (Socket*)desc);
         }
         descriptor_setOwnerProcess(desc, NULL);
         descriptortable_remove(proc->descTable, descriptor_getHandle(desc));

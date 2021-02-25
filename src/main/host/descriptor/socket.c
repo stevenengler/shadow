@@ -22,6 +22,8 @@
 #include "main/routing/packet.h"
 #include "main/utility/utility.h"
 
+#include "support/logger/logger.h"
+
 static Socket* _socket_fromLegacyDescriptor(LegacyDescriptor* descriptor) {
     utility_assert(descriptor_getType(descriptor) == DT_TCPSOCKET ||
                    descriptor_getType(descriptor) == DT_UDPSOCKET);
@@ -162,6 +164,7 @@ void socket_dropPacket(Socket* socket, Packet* packet) {
 /* functions implemented by socket */
 
 Packet* socket_pullOutPacket(Socket* socket) {
+	//warning("Pulled packed on socket %p", socket);
     return socket_removeFromOutputBuffer(socket);
 }
 
@@ -431,7 +434,7 @@ gboolean socket_addToOutputBuffer(Socket* socket, Packet* packet) {
     /* tell the interface to include us when sending out to the network */
     in_addr_t ip = packet_getSourceIP(packet);
     NetworkInterface* interface = host_lookupInterface(worker_getActiveHost(), ip);
-    networkinterface_wantsSend(interface, socket);
+    networkinterface_legacySocketWantsSend(interface, socket);
 
     return TRUE;
 }

@@ -112,10 +112,10 @@ gboolean host_doesInterfaceExist(Host* host, in_addr_t interfaceIP);
 gboolean host_isInterfaceAvailable(Host* host, ProtocolType type,
                                    in_addr_t interfaceIP, in_port_t port,
                                    in_addr_t peerIP, in_port_t peerPort);
-void host_associateInterface(Host* host, Socket* socket, in_addr_t bindAddress,
-                             in_port_t bindPort, in_addr_t peerAddress,
-                             in_port_t peerPort);
-void host_disassociateInterface(Host* host, Socket* socket);
+void host_associateInterfaceLegacySocket(Host* host, Socket* socket, in_addr_t bindAddress);
+void host_associateInterfaceSocketFile(Host* host, const SocketFile* socket, in_addr_t bindAddress);
+void host_disassociateInterfaceLegacySocket(Host* host, Socket* socket);
+void host_disassociateInterfaceSocketFile(Host* host, const SocketFile* socket);
 in_port_t host_getRandomFreePort(Host* host, ProtocolType type,
                                  in_addr_t interfaceIP, in_addr_t peerIP,
                                  in_port_t peerPort);

@@ -45,7 +45,7 @@ pub enum SocketFileRefMut<'a> {
     InetDgram(atomic_refcell::AtomicRefMut<'a, inet::InetDgramFile>),
 }
 
-impl SocketFileRef<'_> {
+impl_many!(SocketFileRefMut<'_>, SocketFileRef<'_> {
     pub fn status(&self) -> FileStatus {
         match self {
             Self::InetDgram(ref f) => f.status(),
@@ -100,21 +100,9 @@ impl SocketFileRef<'_> {
             Self::InetDgram(f) => f.peek_next_packet(),
         }
     }
-}
+});
 
 impl SocketFileRefMut<'_> {
-    pub fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn {
-        match self {
-            Self::InetDgram(ref mut f) => f.recvfrom(Some(bytes), event_queue).1,
-        }
-    }
-
-    pub fn write(&mut self, bytes: &[u8], event_queue: &mut EventQueue) -> SyscallReturn {
-        match self {
-            Self::InetDgram(ref mut f) => f.sendto(Some(bytes), None, event_queue),
-        }
-    }
-
     pub fn recvfrom(
         &mut self,
         bytes: Option<&mut [u8]>,
@@ -142,39 +130,15 @@ impl SocketFileRefMut<'_> {
         }
     }
 
-    pub fn status(&self) -> FileStatus {
-        match self {
-            Self::InetDgram(ref f) => f.status(),
-        }
-    }
-
-    pub fn get_flags(&self) -> FileFlags {
-        match self {
-            Self::InetDgram(f) => f.get_flags(),
-        }
-    }
-
     pub fn set_flags(&mut self, flags: FileFlags) {
         match self {
             Self::InetDgram(f) => f.set_flags(flags),
         }
     }
 
-    pub fn get_bound_address(&self) -> Option<nix::sys::socket::SockAddr> {
-        match self {
-            Self::InetDgram(f) => f.get_bound_address(),
-        }
-    }
-
     pub fn set_bound_address(&mut self, addr: nix::sys::socket::SockAddr) -> Result<(), String> {
         match self {
             Self::InetDgram(f) => f.set_bound_address(addr),
-        }
-    }
-
-    pub fn get_peer_address(&self) -> Option<nix::sys::socket::SockAddr> {
-        match self {
-            Self::InetDgram(f) => f.get_peer_address(),
         }
     }
 
@@ -188,22 +152,9 @@ impl SocketFileRefMut<'_> {
         }
     }
 
-    pub fn shutdown(&self, how: nix::sys::socket::Shutdown) -> SyscallReturn {
+    pub fn shutdown(&mut self, how: nix::sys::socket::Shutdown) -> SyscallReturn {
         match self {
             Self::InetDgram(f) => f.shutdown(how),
-        }
-    }
-
-    pub fn getsockopt(
-        &self,
-        sys: &mut c::SysCallHandler,
-        level: libc::c_int,
-        optname: libc::c_int,
-        optval_ptr: c::PluginPtr,
-        optval_len: &mut libc::socklen_t,
-    ) -> SyscallReturn {
-        match self {
-            Self::InetDgram(f) => f.getsockopt(sys, level, optname, optval_ptr, optval_len),
         }
     }
 
@@ -229,24 +180,6 @@ impl SocketFileRefMut<'_> {
     pub fn remove_packet(&mut self, event_queue: &mut EventQueue) -> Option<Packet> {
         match self {
             Self::InetDgram(f) => f.remove_packet(event_queue),
-        }
-    }
-
-    pub fn peek_next_packet(&self) -> Option<&Packet> {
-        match self {
-            Self::InetDgram(f) => f.peek_next_packet(),
-        }
-    }
-
-    pub fn get_protocol_version(&self) -> c::ProtocolType {
-        match self {
-            Self::InetDgram(f) => f.get_protocol_version(),
-        }
-    }
-
-    pub fn address_family(&self) -> nix::sys::socket::AddressFamily {
-        match self {
-            Self::InetDgram(f) => f.address_family(),
         }
     }
 

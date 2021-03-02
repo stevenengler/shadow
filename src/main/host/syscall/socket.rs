@@ -8,6 +8,7 @@ use crate::host::syscall;
 use crate::host::syscall::Trigger;
 use crate::utility::event_queue::EventQueue;
 
+use std::convert::TryInto;
 use std::sync::Arc;
 
 use atomic_refcell::AtomicRefCell;
@@ -93,96 +94,10 @@ pub fn socket_helper(
     SyscallReturn::Success(fd).into()
 }
 
-fn get_addr_family(addr: *const libc::sockaddr, size: usize) -> Result<libc::sa_family_t, String> {
-    if size < std::mem::size_of::<libc::sockaddr>() {
-        return Err("Address not long enough".into());
-    }
-
-    Ok(unsafe { &*addr }.sa_family)
-}
-
-fn sockaddr_to_nix(
-    addr: *const libc::sockaddr,
-    size: usize,
-) -> Result<nix::sys::socket::SockAddr, String> {
-    let family = get_addr_family(addr, size)? as libc::c_int;
-
-    match family {
-        libc::AF_INET => {
-            if size != std::mem::size_of::<libc::sockaddr_in>() {
-                return Err("Incompatible size for sockaddr_in".into());
-            }
-
-            let addr = unsafe { &*(addr as *const libc::sockaddr_in) };
-            Ok(nix::sys::socket::SockAddr::Inet(
-                nix::sys::socket::InetAddr::V4(*addr),
-            ))
-        }
-        libc::AF_INET6 => {
-            if size != std::mem::size_of::<libc::sockaddr_in6>() {
-                return Err("Incompatible size for sockaddr_in6".into());
-            }
-
-            let addr = unsafe { &*(addr as *const libc::sockaddr_in6) };
-            Ok(nix::sys::socket::SockAddr::Inet(
-                nix::sys::socket::InetAddr::V6(*addr),
-            ))
-        }
-        libc::AF_UNIX => {
-            let path_offset = {
-                // need a temporary object to find the offset since rust doesn't have an offsetof()
-                let temp_sockaddr = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
-                &temp_sockaddr.sun_path as *const _ as usize - &temp_sockaddr as *const _ as usize
-            };
-
-            if size > std::mem::size_of::<libc::sockaddr_un>() || size < path_offset {
-                return Err("Incompatible size for sockaddr_un".into());
-            }
-
-            let addr = unsafe { &*(addr as *const libc::sockaddr_un) };
-            // assume the path is the last member of the sockaddr_un
-            let path_len = size - path_offset;
-            Ok(nix::sys::socket::SockAddr::Unix(
-                nix::sys::socket::UnixAddr(*addr, path_len),
-            ))
-        }
-        _ => Err("Unexpected address family".into()),
-    }
-}
-
-fn empty_sockaddr(family: libc::sa_family_t) -> Result<nix::sys::socket::SockAddr, String> {
-    match family as libc::c_int {
-        libc::AF_INET => {
-            let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-            addr.sin_family = libc::AF_INET as libc::sa_family_t;
-            Ok(nix::sys::socket::SockAddr::Inet(
-                nix::sys::socket::InetAddr::V4(addr),
-            ))
-        }
-        libc::AF_INET6 => {
-            let mut addr: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
-            addr.sin6_family = libc::AF_INET6 as libc::sa_family_t;
-            Ok(nix::sys::socket::SockAddr::Inet(
-                nix::sys::socket::InetAddr::V6(addr),
-            ))
-        }
-        libc::AF_UNIX => {
-            let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-            addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
-            Ok(nix::sys::socket::SockAddr::Unix(
-                nix::sys::socket::UnixAddr(addr, 0),
-            ))
-        }
-        _ => Err("Unexpected address family".into()),
-    }
-}
-
 pub fn bind(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallReturn {
     let fd = unsafe { args.args[0].as_i64 } as libc::c_int;
     let addr_ptr = unsafe { args.args[1].as_ptr };
     let addr_len = unsafe { args.args[2].as_u64 } as libc::socklen_t;
-
-    debug!("Trying to bind socket fd {}", fd);
 
     // get the descriptor, or return early if it doesn't exist
     let desc = match syscall::get_descriptor(fd, sys.process) {
@@ -201,6 +116,9 @@ pub fn bind(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallRet
         },
     };
 
+    debug!("Trying to bind socket fd {}", fd);
+
+    // get the socket for the descriptor
     let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => {
@@ -208,150 +126,46 @@ pub fn bind(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallRet
         }
     };
 
-    //
-    //
-    //
-    //
-    //
-    //
-
     // it's an error if the socket is already bound
-    if socket.borrow().get_bound_address().is_some() {
-        info!("socket descriptor {} is already bound to an address", fd);
+    if let Some(bound_addr) = socket.borrow().get_bound_address() {
+        debug!("Socket fd {} is already bound to {}", fd, bound_addr);
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
-    // TODO: we assume AF_INET here, change this when we support AF_UNIX
-    // let unix_len = std::mem::size_of::<libc::sockaddr_un>(); // if sa_family==AF_UNIX
-    let inet_len = std::mem::size_of::<libc::sockaddr_in>();
-    if (addr_len as usize) < inet_len {
-        info!("supplied address is not large enough for a inet address");
-        return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
-    }
-
-    // make sure the addr PluginPtr is not NULL
-    if addr_ptr.val == 0 {
-        info!("binding to a NULL address is invalid");
-        return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
-    }
-
-    let addr_ptr =
-        unsafe { c::process_getReadablePtr(sys.process, sys.thread, addr_ptr, addr_len as u64) };
-    let addr_ptr = addr_ptr as *const libc::sockaddr;
-
-    let addr = sockaddr_to_nix(addr_ptr, addr_len as usize);
-
-    let addr = match addr {
-        Ok(x) => x,
-        Err(x) => {
-            warn!("Unable to convert the sockaddr: {}", x);
+    // get the bind address
+    let addr = match syscall::get_readable_ptr::<libc::sockaddr>(
+        sys.process,
+        sys.thread,
+        addr_ptr,
+        addr_len.try_into().unwrap(),
+    ) {
+        syscall::ResolvedPluginPtr::Address(ptr) => {
+            match unsafe { sockaddr_to_nix(ptr, addr_len.try_into().unwrap()) } {
+                Ok(x) => x,
+                Err(x) => {
+                    warn!("Unable to convert the sockaddr to a nix object: {}", x);
+                    return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
+                }
+            }
+        }
+        syscall::ResolvedPluginPtr::Null => {
+            debug!("Cannot bind fd {} to a NULL address", fd);
+            return SyscallReturn::Error(nix::errno::Errno::EFAULT).into();
+        }
+        syscall::ResolvedPluginPtr::ZeroLen | syscall::ResolvedPluginPtr::LenTooSmall => {
             return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
         }
     };
 
-    // TODO: we assume AF_INET here, change this when we support AF_UNIX
-    if !matches!(
-        addr,
-        nix::sys::socket::SockAddr::Inet(nix::sys::socket::InetAddr::V4(_))
-    ) {
-        warn!("we only support AF_INET",);
+    // bind the address to the socket
+    if let nix::sys::socket::SockAddr::Inet(addr) = addr {
+        if let Some(x) = bind_to_interface(socket, addr, sys) {
+            return x;
+        }
+    } else {
+        warn!("Binding only supports AF_INET sockets");
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
-
-    let (bind_ip_be, bind_port_be) = match addr {
-        nix::sys::socket::SockAddr::Inet(addr) => {
-            let ip = match addr.ip() {
-                nix::sys::socket::IpAddr::V4(x) => u32::from_be_bytes(x.octets()).to_be(),
-                _ => unreachable!(),
-            };
-            (ip, addr.port().to_be())
-        }
-        _ => unreachable!(),
-    };
-
-    // get the requested address and port
-    //struct sockaddr_in* inet_addr = (struct sockaddr_in*)addr;
-    //in_addr_t bindAddr = inet_addr->sin_addr.s_addr;
-    //in_port_t bindPort = inet_addr->sin_port;
-
-    //
-    //
-    //
-    //
-    //
-    //
-
-    // make sure we have an interface at that address
-    if unsafe { c::host_doesInterfaceExist(sys.host, bind_ip_be) } == 0 {
-        info!(
-            "no network interface exists for the provided bind address {}",
-            addr
-        );
-        return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
-    }
-
-    // each protocol type gets its own ephemeral port mapping
-    //let protocol_type = unsafe { c::socket_getProtocol(socket_desc) };
-    let protocol_type = socket.borrow().get_protocol_version();
-
-    // get a free ephemeral port if they didn't specify one
-    let mut bind_port_be = bind_port_be;
-    if bind_port_be == 0 {
-        bind_port_be =
-            unsafe { c::host_getRandomFreePort(sys.host, protocol_type, bind_ip_be, 0, 0) };
-        debug!(
-            "binding to generated ephemeral port {}",
-            u16::from_be(bind_port_be)
-        ); // ntohs(bind_port)
-    }
-    let bind_port_be = bind_port_be;
-
-    let addr = match addr {
-        nix::sys::socket::SockAddr::Inet(addr) => {
-            let new_addr = nix::sys::socket::InetAddr::new(addr.ip(), u16::from_be(bind_port_be));
-            nix::sys::socket::SockAddr::Inet(new_addr)
-        }
-        _ => unreachable!(),
-    };
-
-    // ephemeral port unavailable
-    if (bind_port_be == 0) {
-        info!("binding required an ephemeral port and none are available");
-        return SyscallReturn::Error(nix::errno::Errno::EADDRINUSE).into();
-    }
-
-    // make sure the port is available at this address for this protocol
-    if unsafe {
-        c::host_isInterfaceAvailable(sys.host, protocol_type, bind_ip_be, bind_port_be, 0, 0)
-    } == 0
-    {
-        info!("the provided address {} is not available", addr,);
-        return SyscallReturn::Error(nix::errno::Errno::EADDRINUSE).into();
-    }
-
-    //
-    //
-    //
-    //
-    //
-    //
-
-    //socket_setPeerName(socket, peerAddress, peerPort);
-    //socket_setSocketName(socket, bindAddress, bindPort);
-
-    socket.borrow_mut().set_bound_address(addr).unwrap();
-
-    // set associations
-    //let socket_ptr = Box::into_raw(Box::new(socket.clone()));
-    //unsafe { c::host_associateInterfaceSocketFile(sys.host, socket_ptr, bind_ip_be) };
-    unsafe { c::host_associateInterfaceSocketFile(sys.host, socket as *const _, bind_ip_be) };
-
-    //
-    //
-    //
-    //
-    //
-    //
 
     SyscallReturn::Success(0).into()
 }
@@ -406,64 +220,37 @@ pub fn recvfrom_helper(
     let posix_file = desc.get_file();
     let file_flags = posix_file.borrow().get_flags();
 
+    // get the socket for the descriptor
     let socket = match posix_file {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
     };
 
-    /*
-    // if the buffer is null, the len must be 0
-    if buf_ptr.val == 0 && buf_len != 0 {
-        info!("When receiving with a null buffer, the len must be 0");
-        return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
-    }
-    */
-
     // address length pointer cannot be null if the address buffer is non-null
     if addr_ptr.val != 0 && addr_len_ptr.val == 0 {
-        info!("When receiving with a null addr, the addr len must also be null");
+        debug!("When receiving with a null addr, the addr len must also be null");
         return SyscallReturn::Error(nix::errno::Errno::EFAULT).into();
     }
 
-    let mut buf = if buf_ptr.val != 0 {
-        if buf_len > 0 {
-            // TODO: dynamically compute size based on how much data is actually available in the descriptor
-            let size_needed = match socket {
-                // we should not truncate datagram messages
-                socket::SocketFile::InetDgram(_) => {
-                    std::cmp::min(buf_len, 1 + c::CONFIG_DATAGRAM_MAX_SIZE as usize)
-                }
-                _ => std::cmp::min(buf_len, c::SYSCALL_IO_BUFSIZE as usize),
-            };
-
-            let buf_ptr = unsafe {
-                c::process_getWriteablePtr(sys.process, sys.thread, buf_ptr, size_needed as u64)
-            };
-            Some(unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut u8, size_needed) })
-        } else {
-            Some(&mut [][..])
-        }
-    } else {
-        None
-    };
-
-    /*
-    let mut buf = {
-        // TODO: dynamically compute size based on how much data is actually available in the descriptor
-        let size_needed = match socket {
+    // TODO: dynamically compute size based on how much data is actually available in the descriptor
+    let size_needed = std::cmp::min(
+        buf_len,
+        match socket {
             // we should not truncate datagram messages
-            socket::SocketFile::InetDgram(_) => {
-                std::cmp::min(buf_len, 1 + c::CONFIG_DATAGRAM_MAX_SIZE as usize)
-            }
-            _ => std::cmp::min(buf_len, c::SYSCALL_IO_BUFSIZE as usize),
-        };
+            socket::SocketFile::InetDgram(_) => 1 + c::CONFIG_DATAGRAM_MAX_SIZE as usize,
+            _ => c::SYSCALL_IO_BUFSIZE as usize,
+        },
+    );
 
-        let buf_ptr = unsafe {
-            c::process_getWriteablePtr(sys.process, sys.thread, buf_ptr, size_needed as u64)
+    let mut buf =
+        match syscall::get_writable_ptr::<u8>(sys.process, sys.thread, buf_ptr, size_needed) {
+            syscall::MutResolvedPluginPtr::Address(ptr) => {
+                Some(unsafe { std::slice::from_raw_parts_mut(ptr, size_needed) })
+            }
+            syscall::MutResolvedPluginPtr::ZeroLen => Some(&mut [][..]),
+            syscall::MutResolvedPluginPtr::Null => None,
+            syscall::MutResolvedPluginPtr::LenTooSmall => unreachable!(),
         };
-        unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut u8, size_needed) }
-    };
-    */
 
     if let Some(ref buf) = buf {
         debug!("Attempting to recv {} bytes", buf.len());
@@ -473,23 +260,7 @@ pub fn recvfrom_helper(
     let (from_addr, result) =
         EventQueue::queue_and_run(|event_queue| socket.borrow_mut().recvfrom(buf, event_queue));
 
-    // TODO: we probably want Rust to store nix addresses instead
-    /*
-    if addr_ptr.val != 0 && addr_len_ptr.val != 0 {
-        let addr_len_ptr =
-            unsafe { c::process_getMutablePtr(sys.process, sys.thread, addr_len_ptr, std::mem::size_of<libc::socklen_t>() as u64) };
-        let mut addr_len = unsafe { &mut *(addr_len_ptr as *mut libc::socklen_t) };
-
-        let addr_size_needed = std::cmp::min(addr_len, c::SYSCALL_IO_BUFSIZE as usize);
-        let addr_ptr =
-            unsafe { c::process_getWriteablePtr(sys.process, sys.thread, addr_ptr, addr_size_needed as u64) };
-        let mut addr = unsafe { std::slice::from_raw_parts_mut(addr_ptr as *mut u8, addr_size_needed) };
-
-
-    }
-    */
-
-    // if the syscall would block, it's a blocking descriptor, and the `MSG_DONTWAIT` flag is set
+    // if the syscall would block, it's a blocking descriptor, and the `MSG_DONTWAIT` flag is not set
     if result == SyscallReturn::Error(nix::errno::EWOULDBLOCK)
         && !file_flags.contains(FileFlags::NONBLOCK)
         && flags & libc::MSG_DONTWAIT == 0
@@ -503,125 +274,13 @@ pub fn recvfrom_helper(
         };
     }
 
-    // if the addr is non-null and the addr len is non-null
-    if addr_ptr.val != 0 && addr_len_ptr.val != 0 {
-        if let Some(from_addr) = from_addr {
-            let addr_len_ptr = unsafe {
-                c::process_getMutablePtr(
-                    sys.process,
-                    sys.thread,
-                    addr_len_ptr,
-                    std::mem::size_of::<libc::socklen_t>() as u64,
-                )
-            };
-            let mut addr_len = unsafe { &mut *(addr_len_ptr as *mut libc::socklen_t) };
-
-            let mut addr_ptr = if *addr_len > 0 {
-                let addr_size_needed = std::cmp::min(*addr_len, c::SYSCALL_IO_BUFSIZE) as usize;
-                let addr_ptr = unsafe {
-                    c::process_getWriteablePtr(
-                        sys.process,
-                        sys.thread,
-                        addr_ptr,
-                        addr_size_needed as u64,
-                    )
-                };
-                //Some(unsafe { std::slice::from_raw_parts_mut(addr_ptr as *mut u8, addr_size_needed) })
-                Some(addr_ptr as *mut u8)
-            } else {
-                None
-            };
-
-            if let Some(mut addr_ptr) = addr_ptr {
-                let (from_addr, from_len) = from_addr.as_ffi_pair();
-                let len_to_copy = std::cmp::min(*addr_len, from_len);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        from_addr as *const _ as *const u8,
-                        addr_ptr,
-                        len_to_copy as usize,
-                    )
-                };
-
-                *addr_len = len_to_copy;
-            }
+    if let Some(from_addr) = from_addr {
+        if addr_ptr.val != 0 && addr_len_ptr.val != 0 {
+            copy_sockaddr_to_plugin(sys.process, sys.thread, from_addr, addr_ptr, addr_len_ptr);
         }
     }
 
     result.into()
-}
-
-fn implicit_bind(
-    socket: &socket::SocketFile,
-    peer_addr: &Option<nix::sys::socket::SockAddr>,
-    sys: &mut c::SysCallHandler,
-) -> Option<c::SysCallReturn> {
-    let addr = peer_addr;
-
-    // if the socket is not bound
-    if socket.borrow().get_bound_address().is_none() {
-        let temp_addr = addr.or(socket.borrow().get_peer_address());
-
-        // if the socket is an inet dgram socket and the address is an inet address
-        if let (
-            socket::SocketFile::InetDgram(inet_socket),
-            Some(nix::sys::socket::SockAddr::Inet(inet_addr)),
-        ) = (socket, temp_addr)
-        {
-            // automatically bind the socket
-            let bind_ip = if inet_addr.ip().to_std().is_loopback() {
-                inet_addr.ip()
-            } else {
-                // TODO: is this right? what if the default address is on a different interface from the default?
-                // should we bind to INADDR_ANY?
-                let ip_be = unsafe { c::address_toNetworkIP(c::host_getDefaultAddress(sys.host)) };
-                let ip = u32::from_be(ip_be).to_be_bytes();
-                nix::sys::socket::IpAddr::new_v4(ip[0], ip[1], ip[2], ip[3])
-            };
-
-            let bind_ip = match bind_ip {
-                nix::sys::socket::IpAddr::V4(x) => x,
-                _ => {
-                    warn!("Cannot bind to an IPv6 address");
-                    return Some(SyscallReturn::Error(nix::errno::Errno::EINVAL).into());
-                }
-            };
-
-            let protocol_type = inet_socket.borrow().get_protocol_version();
-
-            let bind_ip_be = u32::from_be_bytes(bind_ip.octets()).to_be();
-            let bind_port_be =
-                unsafe { c::host_getRandomFreePort(sys.host, protocol_type, bind_ip_be, 0, 0) };
-
-            // ephemeral port unavailable
-            if (bind_port_be == 0) {
-                info!("binding required an ephemeral port and none are available");
-                return Some(SyscallReturn::Error(nix::errno::Errno::EADDRNOTAVAIL).into());
-            }
-
-            let bind_port = u16::from_be(bind_port_be);
-
-            // TODO: why do we remove the peer address here?
-            //socket.borrow_mut().set_peer_address(None).unwrap();
-            socket
-                .borrow_mut()
-                .set_bound_address(nix::sys::socket::SockAddr::Inet(
-                    nix::sys::socket::InetAddr::new(
-                        nix::sys::socket::IpAddr::V4(bind_ip),
-                        bind_port,
-                    ),
-                ))
-                .unwrap();
-
-            // set associations
-            unsafe {
-                c::host_associateInterfaceSocketFile(sys.host, socket as *const _, bind_ip_be)
-            };
-            debug!("Bound socket to {}:{}", bind_ip, bind_port);
-        }
-    }
-
-    None
 }
 
 pub fn sendto(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallReturn {
@@ -665,6 +324,7 @@ pub fn sendto_helper(
     let posix_file = desc.get_file();
     let file_flags = posix_file.borrow().get_flags();
 
+    // get the socket for the descriptor
     let socket = match posix_file {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
@@ -678,7 +338,7 @@ pub fn sendto_helper(
 
     // need a non-negative size
     if buf_len < 0 {
-        info!("Invalid length {} provided on descriptor {}", buf_len, fd);
+        debug!("Invalid length {} provided on descriptor {}", buf_len, fd);
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
@@ -709,7 +369,7 @@ pub fn sendto_helper(
         match sockaddr_to_nix(addr_ptr, addr_len as usize) {
             Ok(x) => Some(x),
             Err(x) => {
-                warn!("Unable to convert the sockaddr: {}", x);
+                warn!("Unable to convert the sockaddr to a nix object: {}", x);
                 return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
             }
         }
@@ -717,74 +377,14 @@ pub fn sendto_helper(
         None
     };
 
-    if let Some(rv) = implicit_bind(socket, &addr, sys) {
-        return rv;
-    }
-
-    /*
-    // if the socket is not bound
-    if socket.borrow().get_bound_address().is_none() {
-        let temp_addr = addr.or(socket.borrow().get_peer_address());
-
-        // if the socket is an inet dgram socket and the address is an inet address
-        if let (
-            socket::SocketFile::InetDgram(inet_socket),
-            Some(nix::sys::socket::SockAddr::Inet(inet_addr)),
-        ) = (socket, temp_addr)
-        {
-            // automatically bind the socket
-            let bind_ip = if inet_addr.ip().to_std().is_loopback() {
-                inet_addr.ip()
-            } else {
-                // TODO: is this right? what if the default address is on a different interface from the default?
-                // should we bind to INADDR_ANY?
-                let ip_be = unsafe { c::address_toNetworkIP(c::host_getDefaultAddress(sys.host)) };
-                let ip = u32::from_be(ip_be).to_be_bytes();
-                nix::sys::socket::IpAddr::new_v4(ip[0], ip[1], ip[2], ip[3])
-            };
-
-            let bind_ip = match bind_ip {
-                nix::sys::socket::IpAddr::V4(x) => x,
-                _ => {
-                    warn!("Cannot bind to an IPv6 address");
-                    return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
-                }
-            };
-
-            let protocol_type = inet_socket.borrow().get_protocol_version();
-
-            let bind_ip_be = u32::from_be_bytes(bind_ip.octets()).to_be();
-            let bind_port_be =
-                unsafe { c::host_getRandomFreePort(sys.host, protocol_type, bind_ip_be, 0, 0) };
-
-            // ephemeral port unavailable
-            if (bind_port_be == 0) {
-                info!("binding required an ephemeral port and none are available");
-                return SyscallReturn::Error(nix::errno::Errno::EADDRNOTAVAIL).into();
+    // if an unbound inet socket, bind the socket
+    if let Some(nix::sys::socket::SockAddr::Inet(addr)) = addr {
+        if socket.borrow().get_bound_address().is_none() {
+            if let Some(rv) = implicit_bind(socket, &Some(addr.ip()), sys) {
+                return rv;
             }
-
-            let bind_port = u16::from_be(bind_port_be);
-
-            // TODO: why do we remove the peer address here?
-            //socket.borrow_mut().set_peer_address(None).unwrap();
-            socket
-                .borrow_mut()
-                .set_bound_address(nix::sys::socket::SockAddr::Inet(
-                    nix::sys::socket::InetAddr::new(
-                        nix::sys::socket::IpAddr::V4(bind_ip),
-                        bind_port,
-                    ),
-                ))
-                .unwrap();
-
-            // set associations
-            unsafe {
-                c::host_associateInterfaceSocketFile(sys.host, socket as *const _, bind_ip_be)
-            };
-            debug!("Bound socket to {}:{}", bind_ip, bind_port);
         }
     }
-    */
 
     if let Some(ref buf) = buf {
         debug!("Attempting to send {} bytes to {:?}", buf.len(), addr);
@@ -796,6 +396,7 @@ pub fn sendto_helper(
 
     let bound_addr = socket.borrow().get_bound_address();
 
+    // if an inet socket, inform the network interface
     if let Some(nix::sys::socket::SockAddr::Inet(bound_addr)) = bound_addr {
         match bound_addr.ip() {
             nix::sys::socket::IpAddr::V4(bound_addr) => {
@@ -807,7 +408,7 @@ pub fn sendto_helper(
         }
     }
 
-    // if the syscall would block, it's a blocking descriptor, and the `MSG_DONTWAIT` flag is set
+    // if the syscall would block, it's a blocking descriptor, and the `MSG_DONTWAIT` flag is not set
     if result == SyscallReturn::Error(nix::errno::EWOULDBLOCK)
         && !file_flags.contains(FileFlags::NONBLOCK)
         && flags & libc::MSG_DONTWAIT == 0
@@ -846,16 +447,15 @@ pub fn connect(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCall
         },
     };
 
-    let posix_file = desc.get_file();
-
-    let socket = match posix_file {
+    // get the socket for the descriptor
+    let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
     };
 
     // make sure the addr PluginPtr is not NULL
     if addr_ptr.val == 0 {
-        info!("binding to a NULL address is invalid");
+        debug!("binding to a NULL address is invalid");
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
@@ -877,7 +477,7 @@ pub fn connect(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCall
         match sockaddr_to_nix(addr_ptr, addr_len as usize) {
             Ok(x) => Some(x),
             Err(x) => {
-                warn!("Unable to convert the sockaddr: {}", x);
+                warn!("Unable to convert the sockaddr to a nix object: {}", x);
                 return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
             }
         }
@@ -887,8 +487,13 @@ pub fn connect(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCall
     let result =
         EventQueue::queue_and_run(|event_queue| socket.borrow_mut().connect(addr, event_queue));
 
-    if let Some(rv) = implicit_bind(socket, &addr, sys) {
-        return rv;
+    // if an unbound inet socket, bind the socket
+    if socket.borrow().get_bound_address().is_none() {
+        if let Some(nix::sys::socket::SockAddr::Inet(addr)) = addr {
+            if let Some(rv) = implicit_bind(socket, &Some(addr.ip()), sys) {
+                return rv;
+            }
+        }
     }
 
     result.into()
@@ -916,51 +521,33 @@ pub fn getsockname(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::Sys
         },
     };
 
-    let posix_file = desc.get_file();
-
-    let socket = match posix_file {
+    // get the socket for the descriptor
+    let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
     };
 
     // make sure the addr and addr_len is not NULL
     if addr_ptr.val == 0 || addr_len_ptr.val == 0 {
-        info!("Address info is null");
+        debug!("Address info is null");
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
-    let addr_len_ptr = unsafe {
-        c::process_getMutablePtr(
-            sys.process,
-            sys.thread,
-            addr_len_ptr,
-            std::mem::size_of::<libc::socklen_t>() as u64,
-        )
-    };
-    let addr_len = unsafe { &mut *(addr_len_ptr as *mut libc::socklen_t) };
-
-    let addr_ptr =
-        unsafe { c::process_getWriteablePtr(sys.process, sys.thread, addr_ptr, *addr_len as u64) };
-    let addr_ptr = addr_ptr as *const libc::sockaddr;
-
-    let bound_addr = socket.borrow().get_bound_address();
-
     // if the socket is not bound, use an empty sockaddr instead
-    let addr_to_write = match bound_addr {
+    let addr_to_write = match socket.borrow().get_bound_address() {
         Some(x) => x,
         None => empty_sockaddr(socket.borrow().address_family() as libc::sa_family_t).unwrap(),
     };
 
     debug!("Returning socket address of {}", addr_to_write);
 
-    let (sock_addr, sock_len) = addr_to_write.as_ffi_pair();
-    let sock_addr = sock_addr as *const libc::sockaddr;
-
-    let len_to_copy = std::cmp::min(*addr_len, sock_len) as usize;
-
-    unsafe { std::ptr::copy::<u8>(sock_addr as *const u8, addr_ptr as *mut u8, len_to_copy) };
-
-    *addr_len = sock_len;
+    copy_sockaddr_to_plugin(
+        sys.process,
+        sys.thread,
+        addr_to_write,
+        addr_ptr,
+        addr_len_ptr,
+    );
 
     SyscallReturn::Success(0).into()
 }
@@ -987,47 +574,32 @@ pub fn getpeername(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::Sys
         },
     };
 
-    let posix_file = desc.get_file();
-
-    let socket = match posix_file {
+    // get the socket for the descriptor
+    let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
     };
 
     // make sure the addr and addr_len is not NULL
     if addr_ptr.val == 0 || addr_len_ptr.val == 0 {
-        info!("Address info is null");
+        debug!("Address info is null");
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
-    let addr_len_ptr = unsafe {
-        c::process_getMutablePtr(
+    if let Some(addr_to_write) = socket.borrow().get_peer_address() {
+        debug!("Returning socket address of {}", addr_to_write);
+        copy_sockaddr_to_plugin(
             sys.process,
             sys.thread,
+            addr_to_write,
+            addr_ptr,
             addr_len_ptr,
-            std::mem::size_of::<libc::socklen_t>() as u64,
-        )
-    };
-    let addr_len = unsafe { &mut *(addr_len_ptr as *mut libc::socklen_t) };
-
-    let addr_ptr =
-        unsafe { c::process_getWriteablePtr(sys.process, sys.thread, addr_ptr, *addr_len as u64) };
-    let addr_ptr = addr_ptr as *const libc::sockaddr;
-
-    if let Some(addr_to_write) = socket.borrow().get_peer_address() {
-        let (sock_addr, sock_len) = addr_to_write.as_ffi_pair();
-        let sock_addr = sock_addr as *const libc::sockaddr;
-
-        let len_to_copy = std::cmp::min(*addr_len, sock_len) as usize;
-
-        unsafe { std::ptr::copy::<u8>(sock_addr as *const u8, addr_ptr as *mut u8, len_to_copy) };
-
-        *addr_len = sock_len;
-
-        SyscallReturn::Success(0).into()
+        );
     } else {
-        SyscallReturn::Error(nix::errno::Errno::ENOTCONN).into()
+        return SyscallReturn::Error(nix::errno::Errno::ENOTCONN).into();
     }
+
+    SyscallReturn::Success(0).into()
 }
 
 pub fn listen(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallReturn {
@@ -1126,6 +698,7 @@ pub fn shutdown(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCal
         },
     };
 
+    // get the socket for the descriptor
     let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
@@ -1138,7 +711,7 @@ pub fn shutdown(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCal
         libc::SHUT_WR => nix::sys::socket::Shutdown::Write,
         libc::SHUT_RDWR => nix::sys::socket::Shutdown::Both,
         _ => {
-            info!("Invalid how: {}", how);
+            debug!("Invalid how: {}", how);
             return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
         }
     };
@@ -1171,6 +744,7 @@ pub fn getsockopt(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysC
         },
     };
 
+    // get the socket for the descriptor
     let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
@@ -1183,7 +757,7 @@ pub fn getsockopt(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysC
 
     // make sure the optval_len is not NULL
     if optval_len_ptr.val == 0 {
-        info!("optlen is null");
+        debug!("optlen is null");
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
 
@@ -1240,6 +814,7 @@ pub fn setsockopt(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysC
         },
     };
 
+    // get the socket for the descriptor
     let socket = match desc.get_file() {
         PosixFile::Socket(x) => x,
         _ => return SyscallReturn::Error(nix::errno::Errno::ENOTSOCK).into(),
@@ -1267,6 +842,253 @@ pub fn setsockopt(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysC
             .setsockopt(sys, level, optname, optval_ptr, optval_len)
     })
     .into()
+}
+
+fn get_addr_family(addr: *const libc::sockaddr, size: usize) -> Result<libc::sa_family_t, String> {
+    if size < std::mem::size_of::<libc::sockaddr>() {
+        return Err("Address not long enough".into());
+    }
+
+    Ok(unsafe { &*addr }.sa_family)
+}
+
+fn sockaddr_to_nix(
+    addr: *const libc::sockaddr,
+    size: usize,
+) -> Result<nix::sys::socket::SockAddr, String> {
+    let family = get_addr_family(addr, size)? as libc::c_int;
+
+    match family {
+        libc::AF_INET => {
+            if size != std::mem::size_of::<libc::sockaddr_in>() {
+                return Err("Incompatible size for sockaddr_in".into());
+            }
+
+            let addr = unsafe { &*(addr as *const libc::sockaddr_in) };
+            Ok(nix::sys::socket::SockAddr::Inet(
+                nix::sys::socket::InetAddr::V4(*addr),
+            ))
+        }
+        libc::AF_INET6 => {
+            if size != std::mem::size_of::<libc::sockaddr_in6>() {
+                return Err("Incompatible size for sockaddr_in6".into());
+            }
+
+            let addr = unsafe { &*(addr as *const libc::sockaddr_in6) };
+            Ok(nix::sys::socket::SockAddr::Inet(
+                nix::sys::socket::InetAddr::V6(*addr),
+            ))
+        }
+        libc::AF_UNIX => {
+            let path_offset = {
+                // need a temporary object to find the offset since rust doesn't have an offsetof()
+                let temp_sockaddr = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+                &temp_sockaddr.sun_path as *const _ as usize - &temp_sockaddr as *const _ as usize
+            };
+
+            if size > std::mem::size_of::<libc::sockaddr_un>() || size < path_offset {
+                return Err("Incompatible size for sockaddr_un".into());
+            }
+
+            let addr = unsafe { &*(addr as *const libc::sockaddr_un) };
+
+            // assume the path is the last member of the sockaddr_un
+            let path_len = size - path_offset;
+            Ok(nix::sys::socket::SockAddr::Unix(
+                nix::sys::socket::UnixAddr(*addr, path_len),
+            ))
+        }
+        _ => Err("Unexpected address family".into()),
+    }
+}
+
+/// Returns a nix socket address object where only the family is set.
+fn empty_sockaddr(family: libc::sa_family_t) -> Result<nix::sys::socket::SockAddr, String> {
+    match family as libc::c_int {
+        libc::AF_INET => {
+            let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            addr.sin_family = libc::AF_INET as libc::sa_family_t;
+            Ok(nix::sys::socket::SockAddr::Inet(
+                nix::sys::socket::InetAddr::V4(addr),
+            ))
+        }
+        libc::AF_INET6 => {
+            let mut addr: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            addr.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+            Ok(nix::sys::socket::SockAddr::Inet(
+                nix::sys::socket::InetAddr::V6(addr),
+            ))
+        }
+        libc::AF_UNIX => {
+            let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+            addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+            Ok(nix::sys::socket::SockAddr::Unix(
+                nix::sys::socket::UnixAddr(addr, 0),
+            ))
+        }
+        _ => Err("Unexpected address family".into()),
+    }
+}
+
+/// Copy the socket address to the plugin. Assumes that both plugin pointers are non-NULL. The
+/// plugin's address length will be updated to store the size of the socket address, even if
+/// greater than the provided buffer size.
+fn copy_sockaddr_to_plugin(
+    process: *mut c::Process,
+    thread: *mut c::Thread,
+    addr: nix::sys::socket::SockAddr,
+    addr_ptr: c::PluginPtr,
+    addr_len_ptr: c::PluginPtr,
+) {
+    // check that neither address is NULL
+    assert!(addr_ptr.val != 0 && addr_len_ptr.val != 0);
+
+    let (from_addr, from_len) = addr.as_ffi_pair();
+
+    let mut addr_len = match syscall::get_mutable_ptr::<libc::socklen_t>(
+        process,
+        thread,
+        addr_len_ptr,
+        std::mem::size_of::<libc::socklen_t>(),
+    ) {
+        syscall::MutResolvedPluginPtr::Address(ptr) => unsafe { &mut *ptr },
+        // the address can't be NULL, and we set the length ourselves
+        _ => unreachable!(),
+    };
+
+    // return early if the address length is 0
+    if *addr_len <= 0 {
+        *addr_len = from_len;
+        return;
+    }
+
+    let mut addr_ptr =
+        match syscall::get_writable_ptr::<u8>(process, thread, addr_ptr, *addr_len as usize) {
+            syscall::MutResolvedPluginPtr::Address(ptr) => unsafe { &mut *ptr },
+            // the address can't be NULL, and we know the length is not 0
+            _ => unreachable!(),
+        };
+
+    let len_to_copy = std::cmp::min(*addr_len, from_len) as usize;
+    unsafe {
+        std::ptr::copy_nonoverlapping(from_addr as *const _ as *const u8, addr_ptr, len_to_copy)
+    };
+
+    *addr_len = from_len;
+}
+
+fn addr_to_network_byte_order(
+    addr: nix::sys::socket::InetAddr,
+) -> Result<(libc::in_addr_t, libc::in_port_t), String> {
+    match addr.ip() {
+        nix::sys::socket::IpAddr::V4(x) => {
+            Ok((u32::from_be_bytes(x.octets()).to_be(), addr.port().to_be()))
+        }
+        //_ => unimplemented!("Cannot bind on an IPv6 address"),
+        _ => Err("Cannot convert an IPv6 address to network byte order".into()),
+    }
+}
+
+fn bind_to_interface(
+    socket: &socket::SocketFile,
+    addr: nix::sys::socket::InetAddr,
+    sys: &mut c::SysCallHandler,
+) -> Option<c::SysCallReturn> {
+    let (addr_ip_be, addr_port_be) = addr_to_network_byte_order(addr).unwrap();
+
+    // make sure this is an inet socket
+    if socket.borrow().address_family() != nix::sys::socket::AddressFamily::Inet {
+        debug!(
+            "Only inet sockets can be bound to the network interface, not {:?}",
+            socket.borrow().address_family()
+        );
+        return Some(SyscallReturn::Error(nix::errno::Errno::EINVAL).into());
+    }
+
+    // make sure we have an interface at that address
+    if unsafe { c::host_doesInterfaceExist(sys.host, addr_ip_be) } == 0 {
+        debug!("No network interface exists for the bind address {}", addr);
+        return Some(SyscallReturn::Error(nix::errno::Errno::EINVAL).into());
+    }
+
+    // each protocol type gets its own ephemeral port mapping
+    let protocol_type = socket.borrow().get_protocol_version();
+
+    // get a free ephemeral port if they didn't specify one
+    let (addr, addr_ip_be, addr_port_be) = {
+        if addr_port_be == 0 {
+            let new_addr_port_be =
+                unsafe { c::host_getRandomFreePort(sys.host, protocol_type, addr_ip_be, 0, 0) };
+
+            // update the address with the same ip, but new port
+            let new_addr =
+                nix::sys::socket::InetAddr::new(addr.ip(), u16::from_be(new_addr_port_be));
+
+            debug!("Binding to generated ephemeral port {}", new_addr);
+
+            (new_addr, addr_ip_be, new_addr_port_be)
+        } else {
+            (addr, addr_ip_be, addr_port_be)
+        }
+    };
+
+    // ephemeral port unavailable
+    if (addr.port() == 0) {
+        debug!("Binding required an ephemeral port and none are available");
+        return Some(SyscallReturn::Error(nix::errno::Errno::EADDRINUSE).into());
+    }
+
+    // make sure the port is available at this address for this protocol
+    if unsafe {
+        c::host_isInterfaceAvailable(sys.host, protocol_type, addr_ip_be, addr_port_be, 0, 0)
+    } == 0
+    {
+        debug!("The provided address {} is not available", addr);
+        return Some(SyscallReturn::Error(nix::errno::Errno::EADDRINUSE).into());
+    }
+
+    socket
+        .borrow_mut()
+        .set_bound_address(nix::sys::socket::SockAddr::Inet(addr))
+        .unwrap();
+
+    // set associations
+    // TODO: should we box the socket pointer?
+    unsafe { c::host_associateInterfaceSocketFile(sys.host, socket as *const _, addr_ip_be) };
+
+    None
+}
+
+fn implicit_bind(
+    socket: &socket::SocketFile,
+    remote_ip: &Option<nix::sys::socket::IpAddr>,
+    sys: &mut c::SysCallHandler,
+) -> Option<c::SysCallReturn> {
+    assert!(socket.borrow().get_bound_address().is_none());
+
+    let bind_ip = match remote_ip {
+        Some(ip) => *ip,
+        None => match socket.borrow().get_peer_address() {
+            Some(nix::sys::socket::SockAddr::Inet(peer_addr)) => peer_addr.ip(),
+            _ => {
+                debug!("Socket does not have an inet peer address");
+                return Some(SyscallReturn::Error(nix::errno::Errno::EINVAL).into());
+            }
+        },
+    };
+
+    // choose the address to bind to
+    let bind_ip = if bind_ip.to_std().is_loopback() {
+        bind_ip
+    } else {
+        // TODO: is this right? what if the default address is on a different interface from the default?
+        // should we bind to INADDR_ANY?
+        let ip_be = unsafe { c::address_toNetworkIP(c::host_getDefaultAddress(sys.host)) };
+        let ip = u32::from_be(ip_be).to_be_bytes();
+        nix::sys::socket::IpAddr::new_v4(ip[0], ip[1], ip[2], ip[3])
+    };
+
+    bind_to_interface(socket, nix::sys::socket::InetAddr::new(bind_ip, 0), sys)
 }
 
 mod export {

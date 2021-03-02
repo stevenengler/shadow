@@ -6,6 +6,23 @@ use crate::utility::event_queue::{EventQueue, EventSource, Handle};
 
 use socket::{SocketFile, SocketFileRef, SocketFileRefMut};
 
+#[macro_use]
+macro_rules! impl_many {
+    ($name:ident$(<$a:lifetime>)? { $code:item }) => {
+        impl $name$(<$a>)? {
+            $code
+        }
+    };
+    ($name:ident$(<$a:lifetime>)? { $code:item $($more:item) + }) => {
+        impl_many!($name$(<$a>)? { $code });
+        impl_many!($name$(<$a>)? { $($more) + });
+    };
+    ($name:ident$(<$a:lifetime>)?, $($names:ident$(<$b:lifetime>)?),+ { $($more:item) + }) => {
+        impl_many!($name$(<$a>)? { $($more) + });
+        impl_many!($($names$(<$b>)?),+ { $($more) + });
+    };
+}
+
 pub mod pipe;
 pub mod socket;
 
@@ -297,7 +314,7 @@ pub enum PosixFileRefMut<'a> {
     Socket(SocketFileRefMut<'a>),
 }
 
-impl PosixFileRef<'_> {
+impl_many!(PosixFileRefMut<'_>, PosixFileRef<'_> {
     pub fn status(&self) -> FileStatus {
         match self {
             Self::Pipe(ref f) => f.status(),
@@ -311,20 +328,22 @@ impl PosixFileRef<'_> {
             Self::Socket(f) => f.get_flags(),
         }
     }
-}
+});
 
 impl PosixFileRefMut<'_> {
     pub fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn {
         match self {
             Self::Pipe(ref mut f) => f.read(bytes, event_queue),
-            Self::Socket(ref mut f) => f.read(bytes, event_queue),
+            Self::Socket(ref mut f) => {
+                panic!("Should have called recvfrom() on the socket instead")
+            }
         }
     }
 
     pub fn write(&mut self, bytes: &[u8], event_queue: &mut EventQueue) -> SyscallReturn {
         match self {
             Self::Pipe(ref mut f) => f.write(bytes, event_queue),
-            Self::Socket(ref mut f) => f.write(bytes, event_queue),
+            Self::Socket(ref mut f) => panic!("Should have called sendto() on the socket instead"),
         }
     }
 
@@ -332,20 +351,6 @@ impl PosixFileRefMut<'_> {
         match self {
             Self::Pipe(ref mut f) => f.close(event_queue),
             Self::Socket(ref mut f) => f.close(event_queue),
-        }
-    }
-
-    pub fn status(&self) -> FileStatus {
-        match self {
-            Self::Pipe(ref f) => f.status(),
-            Self::Socket(ref f) => f.status(),
-        }
-    }
-
-    pub fn get_flags(&self) -> FileFlags {
-        match self {
-            Self::Pipe(f) => f.get_flags(),
-            Self::Socket(f) => f.get_flags(),
         }
     }
 

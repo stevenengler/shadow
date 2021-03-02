@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use crate::cshadow as c;
 use crate::host::descriptor::{CompatDescriptor, FileStatus, PosixFile};
 
@@ -67,4 +69,96 @@ pub fn get_descriptor(
     }
 
     Ok(desc)
+}
+
+pub enum ResolvedPluginPtr<T> {
+    Null,
+    ZeroLen,
+    LenTooSmall,
+    Address(*const T),
+}
+
+pub enum MutResolvedPluginPtr<T> {
+    Null,
+    ZeroLen,
+    LenTooSmall,
+    Address(*mut T),
+}
+
+pub fn get_readable_ptr<T>(
+    process: *mut c::Process,
+    thread: *mut c::Thread,
+    plugin_ptr: c::PluginPtr,
+    num_bytes: usize,
+) -> ResolvedPluginPtr<T> {
+    if plugin_ptr.val == 0 {
+        return ResolvedPluginPtr::Null;
+    }
+
+    if num_bytes == 0 {
+        return ResolvedPluginPtr::ZeroLen;
+    }
+
+    if num_bytes < std::mem::size_of::<T>() {
+        return ResolvedPluginPtr::LenTooSmall;
+    }
+
+    let num_bytes = num_bytes.try_into().unwrap();
+
+    let ptr = unsafe { c::process_getReadablePtr(process, thread, plugin_ptr, num_bytes) };
+    let ptr = ptr as *const T;
+
+    ResolvedPluginPtr::Address(ptr)
+}
+
+pub fn get_writable_ptr<T>(
+    process: *mut c::Process,
+    thread: *mut c::Thread,
+    plugin_ptr: c::PluginPtr,
+    num_bytes: usize,
+) -> MutResolvedPluginPtr<T> {
+    if plugin_ptr.val == 0 {
+        return MutResolvedPluginPtr::Null;
+    }
+
+    if num_bytes == 0 {
+        return MutResolvedPluginPtr::ZeroLen;
+    }
+
+    if num_bytes < std::mem::size_of::<T>() {
+        return MutResolvedPluginPtr::LenTooSmall;
+    }
+
+    let num_bytes = num_bytes.try_into().unwrap();
+
+    let ptr = unsafe { c::process_getWriteablePtr(process, thread, plugin_ptr, num_bytes) };
+    let ptr = ptr as *mut T;
+
+    MutResolvedPluginPtr::Address(ptr)
+}
+
+pub fn get_mutable_ptr<T>(
+    process: *mut c::Process,
+    thread: *mut c::Thread,
+    plugin_ptr: c::PluginPtr,
+    num_bytes: usize,
+) -> MutResolvedPluginPtr<T> {
+    if plugin_ptr.val == 0 {
+        return MutResolvedPluginPtr::Null;
+    }
+
+    if num_bytes == 0 {
+        return MutResolvedPluginPtr::ZeroLen;
+    }
+
+    if num_bytes < std::mem::size_of::<T>() {
+        return MutResolvedPluginPtr::LenTooSmall;
+    }
+
+    let num_bytes = num_bytes.try_into().unwrap();
+
+    let ptr = unsafe { c::process_getMutablePtr(process, thread, plugin_ptr, num_bytes) };
+    let ptr = ptr as *mut T;
+
+    MutResolvedPluginPtr::Address(ptr)
 }

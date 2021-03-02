@@ -4,8 +4,7 @@ use crate::host::descriptor::{
     CompatDescriptor, Descriptor, DescriptorFlags, FileFlags, FileMode, FileStatus, PosixFile,
     SyscallReturn,
 };
-use crate::host::syscall;
-use crate::host::syscall::Trigger;
+use crate::host::syscall::{self, Trigger};
 use crate::utility::event_queue::EventQueue;
 
 use std::sync::Arc;
@@ -142,6 +141,22 @@ fn read_helper(
         },
     };
 
+    // if it's a socket, call recvfrom() instead
+    if let PosixFile::Socket(socket) = desc.get_file() {
+        todo!();
+        /*recvfrom_helper(
+            sys,
+            args,
+            fd,
+            buf_ptr,
+            buf_size,
+            flags,
+            addr_ptr: c::PluginPtr,
+            addr_len_ptr: c::PluginPtr,
+        )*/
+    }
+
+    /*
     // need a non-null buffer
     if buf_ptr.val == 0 {
         return SyscallReturn::Error(nix::errno::Errno::EFAULT).into();
@@ -152,13 +167,30 @@ fn read_helper(
         info!("Invalid length {} provided on descriptor {}", buf_size, fd);
         return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
     }
+    */
 
     // TODO: dynamically compute size based on how much data is actually available in the descriptor
     let size_needed = std::cmp::min(buf_size, c::SYSCALL_IO_BUFSIZE as usize);
 
+    /*
     let buf_ptr =
         unsafe { c::process_getWriteablePtr(sys.process, sys.thread, buf_ptr, size_needed as u64) };
     let mut buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut u8, size_needed) };
+    */
+
+    let mut buf =
+        match syscall::get_writable_ptr::<u8>(sys.process, sys.thread, buf_ptr, size_needed) {
+            syscall::MutResolvedPluginPtr::Address(ptr) => unsafe {
+                std::slice::from_raw_parts_mut(ptr, size_needed)
+            },
+            syscall::MutResolvedPluginPtr::Null => {
+                return SyscallReturn::Error(nix::errno::Errno::EFAULT).into()
+            }
+            syscall::MutResolvedPluginPtr::ZeroLen | syscall::MutResolvedPluginPtr::LenTooSmall => {
+                info!("Invalid length {} provided on descriptor {}", buf_size, fd);
+                return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
+            }
+        };
 
     let posix_file = desc.get_file();
     let file_flags = posix_file.borrow().get_flags();
@@ -218,17 +250,38 @@ fn write_helper(
         },
     };
 
+    // if it's a socket, call sendto() instead
+    if let PosixFile::Socket(socket) = desc.get_file() {
+        todo!();
+    };
+
+    /*
     // need a non-null buffer
     if buf_ptr.val == 0 {
         return SyscallReturn::Error(nix::errno::Errno::EFAULT).into();
     }
+    */
 
     // TODO: dynamically compute size based on how much data is actually available in the descriptor
     let size_needed = std::cmp::min(buf_size, c::SYSCALL_IO_BUFSIZE as usize);
 
+    /*
     let buf_ptr =
         unsafe { c::process_getReadablePtr(sys.process, sys.thread, buf_ptr, size_needed as u64) };
     let buf = unsafe { std::slice::from_raw_parts(buf_ptr as *const u8, size_needed) };
+    */
+
+    let buf = match syscall::get_readable_ptr::<u8>(sys.process, sys.thread, buf_ptr, size_needed) {
+        syscall::ResolvedPluginPtr::Address(ptr) => unsafe {
+            std::slice::from_raw_parts(ptr, size_needed)
+        },
+        syscall::ResolvedPluginPtr::Null => {
+            return SyscallReturn::Error(nix::errno::Errno::EFAULT).into()
+        }
+        syscall::ResolvedPluginPtr::ZeroLen | syscall::ResolvedPluginPtr::LenTooSmall => {
+            return SyscallReturn::Error(nix::errno::Errno::EINVAL).into();
+        }
+    };
 
     let posix_file = desc.get_file();
     let file_flags = posix_file.borrow().get_flags();
@@ -342,10 +395,26 @@ fn pipe_helper(sys: &mut c::SysCallHandler, fd_ptr: c::PluginPtr, flags: i32) ->
     // register the file descriptors and return them to the caller
     let num_items = 2;
     let size_needed = num_items * std::mem::size_of::<libc::c_int>();
+    /*
     let fd_ptr =
         unsafe { c::process_getWriteablePtr(sys.process, sys.thread, fd_ptr, size_needed as u64) };
     let fds = unsafe { std::slice::from_raw_parts_mut(fd_ptr as *mut libc::c_int, num_items) };
+    */
+
     // TODO: go through all uses of from_raw_parts and make sure we never pass a null pointer
+
+    let fds = match syscall::get_writable_ptr::<libc::c_int>(
+        sys.process,
+        sys.thread,
+        fd_ptr,
+        size_needed,
+    ) {
+        syscall::MutResolvedPluginPtr::Address(ptr) => unsafe {
+            std::slice::from_raw_parts_mut(ptr, num_items)
+        },
+        // we checked for a NULL pointer earlier, and we set the length ourselves
+        _ => panic!(),
+    };
 
     fds[0] = unsafe {
         c::process_registerCompatDescriptor(

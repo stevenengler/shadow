@@ -88,6 +88,7 @@ set(shadow_srcs
     host/descriptor/channel.c
     host/descriptor/descriptor.c
     host/status_listener.c
+    host/descriptor/compat_socket.c
     host/descriptor/descriptor_table.c
     host/descriptor/eventd.c
     host/descriptor/epoll.c

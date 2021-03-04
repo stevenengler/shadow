@@ -1,16 +1,22 @@
+/*
+ * The Shadow Simulator
+ * Copyright (c) 2010-2011, Rob Jansen
+ * See LICENSE for licensing information
+ */
+
 #include "main/utility/tagged_ptr.h"
 #include "main/utility/utility.h"
 
 // two low-order bits
-const TAG_MASK = (1 << 2) - 1;
+const uintptr_t TAG_MASK = (1 << 2) - 1;
 
-uintptr_t tagPtr(void* ptr, uintptr_t tag) {
-    uintptr_t ptr_int = ptr;
+uintptr_t tagPtr(const void* ptr, uintptr_t tag) {
+    uintptr_t ptrInt = (uintptr_t)ptr;
 
-    utility_assert((ptr_int & TAG_MASK) == 0);
+    utility_assert((ptrInt & TAG_MASK) == 0);
     utility_assert((tag & ~TAG_MASK) == 0);
 
-    return ptr_int | tag;
+    return ptrInt | tag;
 }
 
 void* untagPtr(uintptr_t taggedPtr, uintptr_t* tag) {
@@ -18,5 +24,5 @@ void* untagPtr(uintptr_t taggedPtr, uintptr_t* tag) {
         *tag = taggedPtr & TAG_MASK;
     }
 
-    return taggedPtr & ~TAG_MASK;
+    return (void*)(taggedPtr & ~TAG_MASK);
 }

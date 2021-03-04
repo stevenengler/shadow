@@ -41,7 +41,7 @@ const Packet *socketfile_peekNextOutPacket(const SocketFile *socket);
 
 void socketfile_pushInPacket(const SocketFile *socket, Packet *packet);
 
-const Packet *socketfile_pullOutPacket(const SocketFile *socket);
+Packet *socketfile_pullOutPacket(const SocketFile *socket);
 
 // The new compat descriptor takes ownership of the reference to the legacy descriptor and
 // does not increment its ref count, but will decrement the ref count when this compat

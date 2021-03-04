@@ -439,7 +439,7 @@ mod export {
     }
 
     #[no_mangle]
-    pub extern "C" fn socketfile_pullOutPacket(socket: *const SocketFile) -> *const c::Packet {
+    pub extern "C" fn socketfile_pullOutPacket(socket: *const SocketFile) -> *mut c::Packet {
         assert!(!socket.is_null());
 
         let socket = unsafe { &*socket };
@@ -449,7 +449,7 @@ mod export {
 
         match packet {
             Some(packet) => packet.into_ptr(),
-            None => std::ptr::null(),
+            None => std::ptr::null_mut(),
         }
     }
 }

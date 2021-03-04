@@ -402,7 +402,8 @@ pub fn sendto_helper(
             nix::sys::socket::IpAddr::V4(bound_addr) => {
                 let bound_addr = u32::from_be_bytes(bound_addr.octets()).to_be();
                 let interface = unsafe { c::host_lookupInterface(sys.host, bound_addr) };
-                unsafe { c::networkinterface_socketFileWantsSend(interface, socket as *const _) };
+                let compat_socket = unsafe { c::compatsocket_fromSocketFile(socket as *const _) };
+                unsafe { c::networkinterface_wantsSend(interface, &compat_socket as *const _) };
             }
             _ => unimplemented!(),
         }
@@ -1053,8 +1054,8 @@ fn bind_to_interface(
         .unwrap();
 
     // set associations
-    // TODO: should we box the socket pointer?
-    unsafe { c::host_associateInterfaceSocketFile(sys.host, socket as *const _, addr_ip_be) };
+    let compat_socket = unsafe { c::compatsocket_fromSocketFile(socket as *const _) };
+    unsafe { c::host_associateInterface(sys.host, &compat_socket as *const _, addr_ip_be) };
 
     None
 }

@@ -7,6 +7,7 @@
 
 #include "main/core/logger/shadow_logger.h"
 #include "main/core/worker.h"
+#include "main/host/descriptor/compat_socket.h"
 #include "main/host/descriptor/descriptor.h"
 #include "main/host/network_interface.h"
 #include "main/host/status.h"

@@ -50,7 +50,8 @@ pub fn close(sys: &mut c::SysCallHandler, args: &c::SysCallArgs) -> c::SysCallRe
             if let PosixFile::Socket(socket) = posix_file {
                 //let socket_ptr = Box::into_raw(Box::new(socket.clone()));
                 //unsafe { c::host_disassociateInterfaceSocketFile(sys.host, socket_ptr) };
-                unsafe { c::host_disassociateInterfaceSocketFile(sys.host, socket as *const _) };
+                let compat_socket = unsafe { c::compatsocket_fromSocketFile(socket as *const _) };
+                unsafe { c::host_disassociateInterface(sys.host, &compat_socket as *const _) };
             }
             //}
 
@@ -290,6 +291,7 @@ fn write_helper(
     let result =
         EventQueue::queue_and_run(|event_queue| posix_file.borrow_mut().write(&buf, event_queue));
 
+    /*
     if let PosixFile::Socket(socket) = posix_file {
         let bound_addr = socket.borrow().get_bound_address();
 
@@ -306,6 +308,7 @@ fn write_helper(
             }
         }
     }
+    */
 
     // if the syscall would block and it's a blocking descriptor
     if result == SyscallReturn::Error(nix::errno::EWOULDBLOCK)

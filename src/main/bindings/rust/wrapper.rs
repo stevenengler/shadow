@@ -794,6 +794,99 @@ extern "C" {
 extern "C" {
     pub fn descriptor_setHandle(descriptor: *mut LegacyDescriptor, handle: gint);
 }
+pub use self::_CompatSocketTypes as CompatSocketTypes;
+pub type CompatSocketObject = _CompatSocketObject;
+pub type CompatSocket = _CompatSocket;
+pub type Socket = [u64; 23usize];
+pub const _CompatSocketTypes_CST_LEGACY_SOCKET: _CompatSocketTypes = 0;
+pub const _CompatSocketTypes_CST_SOCKET_FILE: _CompatSocketTypes = 1;
+pub type _CompatSocketTypes = i32;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union _CompatSocketObject {
+    pub as_legacy_socket: *mut Socket,
+    pub as_socket_file: *const SocketFile,
+    _bindgen_union_align: u64,
+}
+#[test]
+fn bindgen_test_layout__CompatSocketObject() {
+    assert_eq!(
+        ::std::mem::size_of::<_CompatSocketObject>(),
+        8usize,
+        concat!("Size of: ", stringify!(_CompatSocketObject))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<_CompatSocketObject>(),
+        8usize,
+        concat!("Alignment of ", stringify!(_CompatSocketObject))
+    );
+    assert_eq!(
+        unsafe {
+            &(*(::std::ptr::null::<_CompatSocketObject>())).as_legacy_socket as *const _ as usize
+        },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(_CompatSocketObject),
+            "::",
+            stringify!(as_legacy_socket)
+        )
+    );
+    assert_eq!(
+        unsafe {
+            &(*(::std::ptr::null::<_CompatSocketObject>())).as_socket_file as *const _ as usize
+        },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(_CompatSocketObject),
+            "::",
+            stringify!(as_socket_file)
+        )
+    );
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct _CompatSocket {
+    pub type_: CompatSocketTypes,
+    pub object: CompatSocketObject,
+}
+#[test]
+fn bindgen_test_layout__CompatSocket() {
+    assert_eq!(
+        ::std::mem::size_of::<_CompatSocket>(),
+        16usize,
+        concat!("Size of: ", stringify!(_CompatSocket))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<_CompatSocket>(),
+        8usize,
+        concat!("Alignment of ", stringify!(_CompatSocket))
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<_CompatSocket>())).type_ as *const _ as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(_CompatSocket),
+            "::",
+            stringify!(type_)
+        )
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<_CompatSocket>())).object as *const _ as usize },
+        8usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(_CompatSocket),
+            "::",
+            stringify!(object)
+        )
+    );
+}
+extern "C" {
+    pub fn compatsocket_fromSocketFile(socket: *const SocketFile) -> CompatSocket;
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _Futex {
@@ -824,9 +917,9 @@ pub struct _NetworkInterface {
 }
 pub type NetworkInterface = _NetworkInterface;
 extern "C" {
-    pub fn networkinterface_socketFileWantsSend(
+    pub fn networkinterface_wantsSend(
         interface: *mut NetworkInterface,
-        transport: *const SocketFile,
+        socket: *const CompatSocket,
     );
 }
 extern "C" {
@@ -861,14 +954,14 @@ extern "C" {
     ) -> gboolean;
 }
 extern "C" {
-    pub fn host_associateInterfaceSocketFile(
+    pub fn host_associateInterface(
         host: *mut Host,
-        socket: *const SocketFile,
+        socket: *const CompatSocket,
         bindAddress: in_addr_t,
     );
 }
 extern "C" {
-    pub fn host_disassociateInterfaceSocketFile(host: *mut Host, socket: *const SocketFile);
+    pub fn host_disassociateInterface(host: *mut Host, socket: *const CompatSocket);
 }
 extern "C" {
     pub fn host_getRandomFreePort(

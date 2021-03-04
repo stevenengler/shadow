@@ -274,7 +274,7 @@ static gchar* _networkinterface_getAssociationKey(NetworkInterface* interface,
     return g_string_free(strBuffer, FALSE);
 }
 
-static gchar* _networkinterface_socketToAssociationKey(NetworkInterface* interface, CompatSocket* socket) {
+static gchar* _networkinterface_socketToAssociationKey(NetworkInterface* interface, const CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 	
 	ProtocolType type = compatsocket_getProtocol(socket);
@@ -315,7 +315,7 @@ gboolean networkinterface_isAssociated(NetworkInterface* interface, ProtocolType
     return isFound;
 }
 
-static void _networkinterface_associate(NetworkInterface* interface, CompatSocket* socket) {
+void networkinterface_associate(NetworkInterface* interface, const CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
     gchar* key = _networkinterface_socketToAssociationKey(interface, socket);
@@ -332,25 +332,7 @@ static void _networkinterface_associate(NetworkInterface* interface, CompatSocke
     debug("associated socket key %s", key);
 }
 
-void networkinterface_associateLegacySocket(NetworkInterface* interface, Socket* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_LEGACY_SOCKET,
-        .object.as_legacy_socket = socket,
-    };
-
-    _networkinterface_associate(interface, &compatSocket);
-}
-
-void networkinterface_associateSocketFile(NetworkInterface* interface, const SocketFile* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_SOCKET_FILE,
-        .object.as_socket_file = socket,
-    };
-
-    _networkinterface_associate(interface, &compatSocket);
-}
-
-static void _networkinterface_disassociate(NetworkInterface* interface, CompatSocket* socket) {
+void networkinterface_disassociate(NetworkInterface* interface, const CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
     gchar* key = _networkinterface_socketToAssociationKey(interface, socket);
@@ -360,25 +342,6 @@ static void _networkinterface_disassociate(NetworkInterface* interface, CompatSo
 
     debug("disassociated socket key %s", key);
     g_free(key);
-}
-
-void networkinterface_disassociateLegacySocket(NetworkInterface* interface, Socket* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_LEGACY_SOCKET,
-        .object.as_legacy_socket = socket,
-    };
-
-    _networkinterface_disassociate(interface, &compatSocket);
-}
-
-void networkinterface_disassociateSocketFile(NetworkInterface* interface,
-                                             const SocketFile* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_SOCKET_FILE,
-        .object.as_socket_file = socket,
-    };
-
-    _networkinterface_disassociate(interface, &compatSocket);
 }
 
 static void _networkinterface_capturePacket(NetworkInterface* interface, Packet* packet) {
@@ -517,7 +480,7 @@ void networkinterface_receivePackets(NetworkInterface* interface) {
     }
 }
 
-static void _networkinterface_updatePacketHeader(CompatSocket* socket, Packet* packet) {
+static void _networkinterface_updatePacketHeader(const CompatSocket* socket, Packet* packet) {
     if (socket->type == CST_LEGACY_SOCKET) {
         LegacyDescriptor* descriptor = (LegacyDescriptor*)socket->object.as_legacy_socket;
 
@@ -664,7 +627,7 @@ static void _networkinterface_sendPackets(NetworkInterface* interface) {
     }
 }
 
-static void _networkinterface_wantsSend(NetworkInterface* interface, CompatSocket* socket) {
+void networkinterface_wantsSend(NetworkInterface* interface, const CompatSocket* socket) {
     MAGIC_ASSERT(interface);
 
     if (compatsocket_peekNextOutPacket(socket) == NULL) {
@@ -693,24 +656,6 @@ static void _networkinterface_wantsSend(NetworkInterface* interface, CompatSocke
 
     /* send packets if we can */
     _networkinterface_sendPackets(interface);
-}
-
-void networkinterface_legacySocketWantsSend(NetworkInterface* interface, Socket* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_LEGACY_SOCKET,
-        .object.as_legacy_socket = socket,
-    };
-
-    _networkinterface_wantsSend(interface, &compatSocket);
-}
-
-void networkinterface_socketFileWantsSend(NetworkInterface* interface, const SocketFile* socket) {
-    CompatSocket compatSocket = {
-        .type = CST_SOCKET_FILE,
-        .object.as_socket_file = socket,
-    };
-
-    _networkinterface_wantsSend(interface, &compatSocket);
 }
 
 void networkinterface_setRouter(NetworkInterface* interface, Router* router) {

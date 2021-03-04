@@ -22,6 +22,7 @@
 #include "main/core/worker.h"
 #include "main/host/cpu.h"
 #include "main/host/descriptor/channel.h"
+#include "main/host/descriptor/compat_socket.h"
 #include "main/host/descriptor/descriptor.h"
 #include "main/host/descriptor/epoll.h"
 #include "main/host/descriptor/file.h"
@@ -464,7 +465,7 @@ Router* host_getUpstreamRouter(Host* host, in_addr_t handle) {
     return networkinterface_getRouter(interface);
 }
 
-void host_associateInterfaceLegacySocket(Host* host, Socket* socket, in_addr_t bindAddress) {
+void host_associateInterface(Host* host, const CompatSocket* socket, in_addr_t bindAddress) {
     MAGIC_ASSERT(host);
 
     /* associate the interfaces corresponding to bindAddress with socket */
@@ -476,43 +477,35 @@ void host_associateInterfaceLegacySocket(Host* host, Socket* socket, in_addr_t b
 
         while(g_hash_table_iter_next(&iter, &key, &value)) {
             NetworkInterface* interface = value;
-            networkinterface_associateLegacySocket(interface, socket);
+            networkinterface_associate(interface, socket);
         }
     } else {
         NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_associateLegacySocket(interface, socket);
+        networkinterface_associate(interface, socket);
     }
 }
 
-void host_associateInterfaceSocketFile(Host* host, const SocketFile* socket, in_addr_t bindAddress) {
-    MAGIC_ASSERT(host);
+void host_disassociateInterface(Host* host, const CompatSocket* socket) {
 
-    /* associate the interfaces corresponding to bindAddress with socket */
-    if(bindAddress == htonl(INADDR_ANY)) {
-        /* need to associate all interfaces */
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init(&iter, host->interfaces);
-
-        while(g_hash_table_iter_next(&iter, &key, &value)) {
-            NetworkInterface* interface = value;
-            networkinterface_associateSocketFile(interface, socket);
-        }
-    } else {
-        NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_associateSocketFile(interface, socket);
-    }
-}
-
-void host_disassociateInterfaceLegacySocket(Host* host, Socket* socket) {
-    if(!socket || !socket_isBound(socket)) {
+    if (socket == NULL) {
         return;
     }
 
     in_addr_t bindAddress;
-    socket_getSocketName(socket, &bindAddress, NULL);
+    if (socket->type == CST_LEGACY_SOCKET) {
+        if (!socket_isBound(socket->object.as_legacy_socket)) {
+            return;
+        }
+        socket_getSocketName(socket->object.as_legacy_socket, &bindAddress, NULL);
+    } else if (socket->type == CST_SOCKET_FILE) {
+        if (!socketfile_getSocketName(socket->object.as_socket_file, &bindAddress, NULL)) {
+            return;
+        }
+    } else {
+        error("Unexpected CompatSocket type");
+    }
 
-    if(bindAddress == htonl(INADDR_ANY)) {
+    if (bindAddress == htonl(INADDR_ANY)) {
         /* need to dissociate all interfaces */
         GHashTableIter iter;
         gpointer key, value;
@@ -520,39 +513,12 @@ void host_disassociateInterfaceLegacySocket(Host* host, Socket* socket) {
 
         while(g_hash_table_iter_next(&iter, &key, &value)) {
             NetworkInterface* interface = value;
-            networkinterface_disassociateLegacySocket(interface, socket);
+            networkinterface_disassociate(interface, socket);
         }
 
     } else {
         NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_disassociateLegacySocket(interface, socket);
-    }
-}
-
-void host_disassociateInterfaceSocketFile(Host* host, const SocketFile* socket) {
-    if(!socket) {
-        return;
-    }
-
-    in_addr_t bindAddress;
-    if(!socketfile_getSocketName(socket, &bindAddress, NULL)) {
-		return;
-	}
-
-    if(bindAddress == htonl(INADDR_ANY)) {
-        /* need to dissociate all interfaces */
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init(&iter, host->interfaces);
-
-        while(g_hash_table_iter_next(&iter, &key, &value)) {
-            NetworkInterface* interface = value;
-            networkinterface_disassociateSocketFile(interface, socket);
-        }
-
-    } else {
-        NetworkInterface* interface = host_lookupInterface(host, bindAddress);
-        networkinterface_disassociateSocketFile(interface, socket);
+        networkinterface_disassociate(interface, socket);
     }
 }
 

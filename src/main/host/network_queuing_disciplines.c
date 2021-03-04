@@ -19,7 +19,7 @@ void rrsocketqueue_init(RrSocketQueue* self) {
     self->queue = g_queue_new();
 }
 
-void rrsocketqueue_destroy(RrSocketQueue* self, void (*fn_processItem)(CompatSocket*)) {
+void rrsocketqueue_destroy(RrSocketQueue* self, void (*fn_processItem)(const CompatSocket*)) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
 
@@ -60,19 +60,19 @@ bool rrsocketqueue_pop(RrSocketQueue* self, CompatSocket* socket) {
     return true;
 }
 
-void rrsocketqueue_push(RrSocketQueue* self, CompatSocket* socket) {
+void rrsocketqueue_push(RrSocketQueue* self, const CompatSocket* socket) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
     g_queue_push_tail(self->queue, (void*)compatsocket_toTagged(socket));
 }
 
-bool rrsocketqueue_find(RrSocketQueue* self, CompatSocket* socket) {
+bool rrsocketqueue_find(RrSocketQueue* self, const CompatSocket* socket) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
     return g_queue_find(self->queue, (void*)compatsocket_toTagged(socket));
 }
 
-static gint _compareSocket(CompatSocket* sa, CompatSocket* sb) {
+static gint _compareSocket(const CompatSocket* sa, const CompatSocket* sb) {
     const Packet* pa = compatsocket_peekNextOutPacket(sa);
     const Packet* pb = compatsocket_peekNextOutPacket(sb);
 
@@ -103,7 +103,7 @@ void fifosocketqueue_init(FifoSocketQueue* self) {
     self->queue = priorityqueue_new((GCompareDataFunc)_compareSocketTagged, NULL, NULL);
 }
 
-void fifosocketqueue_destroy(FifoSocketQueue* self, void (*fn_processItem)(CompatSocket*)) {
+void fifosocketqueue_destroy(FifoSocketQueue* self, void (*fn_processItem)(const CompatSocket*)) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
 
@@ -144,13 +144,13 @@ bool fifosocketqueue_pop(FifoSocketQueue* self, CompatSocket* socket) {
     return true;
 }
 
-void fifosocketqueue_push(FifoSocketQueue* self, CompatSocket* socket) {
+void fifosocketqueue_push(FifoSocketQueue* self, const CompatSocket* socket) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
     priorityqueue_push(self->queue, (void*)compatsocket_toTagged(socket));
 }
 
-bool fifosocketqueue_find(FifoSocketQueue* self, CompatSocket* socket) {
+bool fifosocketqueue_find(FifoSocketQueue* self, const CompatSocket* socket) {
     utility_assert(self != NULL);
     utility_assert(self->queue != NULL);
     return priorityqueue_find(self->queue, (void*)compatsocket_toTagged(socket));

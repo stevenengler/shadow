@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 
 #include "main/core/support/options.h"
+#include "main/host/descriptor/compat_socket.h"
 #include "main/host/descriptor/socket.h"
 #include "main/host/protocol.h"
 #include "main/routing/address.h"
@@ -29,14 +30,10 @@ guint32 networkinterface_getSpeedDownKiBps(NetworkInterface* interface);
 gboolean networkinterface_isAssociated(NetworkInterface* interface, ProtocolType type,
         in_port_t port, in_addr_t peerAddr, in_port_t peerPort);
 
-void networkinterface_associateLegacySocket(NetworkInterface* interface, Socket* transport);
-void networkinterface_associateSocketFile(NetworkInterface* interface, const SocketFile* transport);
+void networkinterface_associate(NetworkInterface* interface, const CompatSocket* socket);
+void networkinterface_disassociate(NetworkInterface* interface, const CompatSocket* socket);
 
-void networkinterface_disassociateLegacySocket(NetworkInterface* interface, Socket* transport);
-void networkinterface_disassociateSocketFile(NetworkInterface* interface, const SocketFile* transport);
-
-void networkinterface_legacySocketWantsSend(NetworkInterface* interface, Socket* transport);
-void networkinterface_socketFileWantsSend(NetworkInterface* interface, const SocketFile* transport);
+void networkinterface_wantsSend(NetworkInterface* interface, const CompatSocket* socket);
 
 void networkinterface_sent(NetworkInterface* interface);
 

@@ -14,6 +14,7 @@
 
 #include "main/core/worker.h"
 #include "main/host/descriptor/channel.h"
+#include "main/host/descriptor/compat_socket.h"
 #include "main/host/descriptor/descriptor.h"
 #include "main/host/descriptor/socket.h"
 #include "main/host/descriptor/tcp.h"
@@ -277,8 +278,8 @@ static int _syscallhandler_bindHelper(SysCallHandler* sys, Socket* socket_desc,
     socket_setSocketName(socket_desc, addr, port);
 
     /* set associations */
-    host_associateInterfaceLegacySocket(
-        sys->host, socket_desc, addr);
+    CompatSocket compat_socket = compatsocket_fromLegacySocket(socket_desc);
+    host_associateInterface(sys->host, &compat_socket, addr);
     return 0;
 }
 
@@ -602,13 +603,13 @@ SysCallReturn _syscallhandler_sendtoHelper(SysCallHandler* sys, int sockfd,
                     .state = SYSCALL_DONE, .retval.as_i64 = -EADDRNOTAVAIL};
             }
 
-			/* connect up socket layer */
-			socket_setPeerName(socket_desc, 0, 0);
-			socket_setSocketName(socket_desc, bindAddr, bindPort);
+            /* connect up socket layer */
+            socket_setPeerName(socket_desc, 0, 0);
+            socket_setSocketName(socket_desc, bindAddr, bindPort);
 
             /* set netiface->socket associations */
-            host_associateInterfaceLegacySocket(
-                sys->host, socket_desc, bindAddr);
+            CompatSocket compat_socket = compatsocket_fromLegacySocket(socket_desc);
+            host_associateInterface(sys->host, &compat_socket, bindAddr);
         }
     } else { // DT_TCPSOCKET
         errcode = tcp_getConnectionError((TCP*)socket_desc);

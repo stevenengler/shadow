@@ -150,6 +150,7 @@ set(shadow_srcs
     utility/pcap_writer.c
     utility/priority_queue.c
     utility/random.c
+    utility/tagged_ptr.c
     utility/utility.c
 )
 add_library(shadow-c STATIC ${shadow_srcs})

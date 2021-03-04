@@ -1,3 +1,8 @@
+/*
+ * The Shadow Simulator
+ * See LICENSE for licensing information
+ */
+
 #include "main/host/descriptor/compat_socket.h"
 
 #include "main/bindings/c/bindings.h"
@@ -36,7 +41,7 @@ uintptr_t compatsocket_toTagged(const CompatSocket* socket) {
     CompatSocketTypes type = socket->type;
     CompatSocketObject object = socket->object;
 
-	const void* object_ptr;
+    const void* object_ptr;
 
     if (socket->type == CST_LEGACY_SOCKET) {
         object_ptr = object.as_legacy_socket;
@@ -64,7 +69,7 @@ CompatSocket compatsocket_fromTagged(uintptr_t ptr) {
         error("Unexpected socket pointer tag");
     }
 
-	type = tag;
+    type = tag;
 
     CompatSocket socket = {
         .type = type,

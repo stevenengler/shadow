@@ -23,6 +23,19 @@ macro_rules! impl_many {
     };
 }
 
+#[macro_use]
+macro_rules! enum_passthrough {
+    ($self:ident, $args2:tt, $($variant:ident),+; $v:vis fn $name:ident $args:tt $(-> $($rv:tt)+)?) => {
+        $v fn $name $args $(-> $($rv)+)? {
+            match $self {
+                $(
+                Self::$variant(x) => x.$name $args2,
+                )*
+            }
+        }
+    };
+}
+
 pub mod pipe;
 pub mod socket;
 
@@ -315,22 +328,28 @@ pub enum PosixFileRefMut<'a> {
 }
 
 impl_many!(PosixFileRefMut<'_>, PosixFileRef<'_> {
-    pub fn status(&self) -> FileStatus {
-        match self {
-            Self::Pipe(ref f) => f.status(),
-            Self::Socket(ref f) => f.status(),
-        }
-    }
-
-    pub fn get_flags(&self) -> FileFlags {
-        match self {
-            Self::Pipe(f) => f.get_flags(),
-            Self::Socket(f) => f.get_flags(),
-        }
-    }
+    enum_passthrough!(self, (), Pipe, Socket;
+        pub fn status(&self) -> FileStatus
+    );
+    enum_passthrough!(self, (), Pipe, Socket;
+        pub fn get_flags(&self) -> FileFlags
+    );
 });
 
 impl PosixFileRefMut<'_> {
+    enum_passthrough!(self, (event_queue), Pipe, Socket;
+        pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn
+    );
+    enum_passthrough!(self, (flags), Pipe, Socket;
+        pub fn set_flags(&mut self, flags: FileFlags)
+    );
+    enum_passthrough!(self, (ptr), Pipe, Socket;
+        pub fn add_legacy_listener(&mut self, ptr: *mut c::StatusListener)
+    );
+    enum_passthrough!(self, (ptr), Pipe, Socket;
+        pub fn remove_legacy_listener(&mut self, ptr: *mut c::StatusListener)
+    );
+
     pub fn read(&mut self, bytes: &mut [u8], event_queue: &mut EventQueue) -> SyscallReturn {
         match self {
             Self::Pipe(ref mut f) => f.read(bytes, event_queue),
@@ -344,34 +363,6 @@ impl PosixFileRefMut<'_> {
         match self {
             Self::Pipe(ref mut f) => f.write(bytes, event_queue),
             Self::Socket(ref mut f) => panic!("Should have called sendto() on the socket instead"),
-        }
-    }
-
-    pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn {
-        match self {
-            Self::Pipe(ref mut f) => f.close(event_queue),
-            Self::Socket(ref mut f) => f.close(event_queue),
-        }
-    }
-
-    pub fn set_flags(&mut self, flags: FileFlags) {
-        match self {
-            Self::Pipe(f) => f.set_flags(flags),
-            Self::Socket(f) => f.set_flags(flags),
-        }
-    }
-
-    pub fn add_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
-        match self {
-            Self::Pipe(f) => f.add_legacy_listener(ptr),
-            Self::Socket(f) => f.add_legacy_listener(ptr),
-        }
-    }
-
-    pub fn remove_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
-        match self {
-            Self::Pipe(f) => f.remove_legacy_listener(ptr),
-            Self::Socket(f) => f.remove_legacy_listener(ptr),
         }
     }
 }

@@ -46,154 +46,96 @@ pub enum SocketFileRefMut<'a> {
 }
 
 impl_many!(SocketFileRefMut<'_>, SocketFileRef<'_> {
-    pub fn status(&self) -> FileStatus {
-        match self {
-            Self::InetDgram(ref f) => f.status(),
-        }
-    }
-
-    pub fn get_flags(&self) -> FileFlags {
-        match self {
-            Self::InetDgram(f) => f.get_flags(),
-        }
-    }
-
-    pub fn get_bound_address(&self) -> Option<nix::sys::socket::SockAddr> {
-        match self {
-            Self::InetDgram(f) => f.get_bound_address(),
-        }
-    }
-
-    pub fn get_peer_address(&self) -> Option<nix::sys::socket::SockAddr> {
-        match self {
-            Self::InetDgram(f) => f.get_peer_address(),
-        }
-    }
-
-    pub fn getsockopt(
-        &self,
-        sys: &mut c::SysCallHandler,
-        level: libc::c_int,
-        optname: libc::c_int,
-        optval_ptr: c::PluginPtr,
-        optval_len: &mut libc::socklen_t,
-    ) -> SyscallReturn {
-        match self {
-            Self::InetDgram(f) => f.getsockopt(sys, level, optname, optval_ptr, optval_len),
-        }
-    }
-
-    pub fn get_protocol_version(&self) -> c::ProtocolType {
-        match self {
-            Self::InetDgram(f) => f.get_protocol_version(),
-        }
-    }
-
-    pub fn address_family(&self) -> nix::sys::socket::AddressFamily {
-        match self {
-            Self::InetDgram(f) => f.address_family(),
-        }
-    }
-
-    pub fn peek_next_packet(&self) -> Option<&Packet> {
-        match self {
-            Self::InetDgram(f) => f.peek_next_packet(),
-        }
-    }
+    enum_passthrough!(self, (), InetDgram;
+        pub fn status(&self) -> FileStatus
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn get_flags(&self) -> FileFlags
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn get_bound_address(&self) -> Option<nix::sys::socket::SockAddr>
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn get_peer_address(&self) -> Option<nix::sys::socket::SockAddr>
+    );
+    enum_passthrough!(self, (sys, level, optname, optval_ptr, optval_len), InetDgram;
+        pub fn getsockopt(
+            &self,
+            sys: &mut c::SysCallHandler,
+            level: libc::c_int,
+            optname: libc::c_int,
+            optval_ptr: c::PluginPtr,
+            optval_len: &mut libc::socklen_t,
+        ) -> SyscallReturn
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn get_protocol_version(&self) -> c::ProtocolType
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn address_family(&self) -> nix::sys::socket::AddressFamily
+    );
+    enum_passthrough!(self, (), InetDgram;
+        pub fn peek_next_packet(&self) -> Option<&Packet>
+    );
 });
 
 impl SocketFileRefMut<'_> {
-    pub fn recvfrom(
-        &mut self,
-        bytes: Option<&mut [u8]>,
-        event_queue: &mut EventQueue,
-    ) -> (Option<nix::sys::socket::SockAddr>, SyscallReturn) {
-        match self {
-            Self::InetDgram(ref mut f) => f.recvfrom(bytes, event_queue),
-        }
-    }
-
-    pub fn sendto(
-        &mut self,
-        bytes: Option<&[u8]>,
-        addr: Option<nix::sys::socket::SockAddr>,
-        event_queue: &mut EventQueue,
-    ) -> SyscallReturn {
-        match self {
-            Self::InetDgram(ref mut f) => f.sendto(bytes, addr, event_queue),
-        }
-    }
-
-    pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn {
-        match self {
-            Self::InetDgram(ref mut f) => f.close(event_queue),
-        }
-    }
-
-    pub fn set_flags(&mut self, flags: FileFlags) {
-        match self {
-            Self::InetDgram(f) => f.set_flags(flags),
-        }
-    }
-
-    pub fn set_bound_address(&mut self, addr: nix::sys::socket::SockAddr) -> Result<(), String> {
-        match self {
-            Self::InetDgram(f) => f.set_bound_address(addr),
-        }
-    }
-
-    pub fn connect(
-        &mut self,
-        addr: Option<nix::sys::socket::SockAddr>,
-        event_queue: &mut EventQueue,
-    ) -> SyscallReturn {
-        match self {
-            Self::InetDgram(f) => f.connect(addr, event_queue),
-        }
-    }
-
-    pub fn shutdown(&mut self, how: nix::sys::socket::Shutdown) -> SyscallReturn {
-        match self {
-            Self::InetDgram(f) => f.shutdown(how),
-        }
-    }
-
-    pub fn setsockopt(
-        &mut self,
-        sys: &mut c::SysCallHandler,
-        level: libc::c_int,
-        optname: libc::c_int,
-        optval_ptr: c::PluginPtr,
-        optval_len: libc::socklen_t,
-    ) -> SyscallReturn {
-        match self {
-            Self::InetDgram(f) => f.setsockopt(sys, level, optname, optval_ptr, optval_len),
-        }
-    }
-
-    pub fn add_packet(&mut self, packet: Packet, event_queue: &mut EventQueue) {
-        match self {
-            Self::InetDgram(f) => f.add_packet(packet, event_queue),
-        }
-    }
-
-    pub fn remove_packet(&mut self, event_queue: &mut EventQueue) -> Option<Packet> {
-        match self {
-            Self::InetDgram(f) => f.remove_packet(event_queue),
-        }
-    }
-
-    pub fn add_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
-        match self {
-            Self::InetDgram(f) => f.add_legacy_listener(ptr),
-        }
-    }
-
-    pub fn remove_legacy_listener(&mut self, ptr: *mut c::StatusListener) {
-        match self {
-            Self::InetDgram(f) => f.remove_legacy_listener(ptr),
-        }
-    }
+    enum_passthrough!(self, (bytes, event_queue), InetDgram;
+        pub fn recvfrom(
+            &mut self,
+            bytes: Option<&mut [u8]>,
+            event_queue: &mut EventQueue,
+        ) -> (Option<nix::sys::socket::SockAddr>, SyscallReturn)
+    );
+    enum_passthrough!(self, (bytes, addr, event_queue), InetDgram;
+        pub fn sendto(
+            &mut self,
+            bytes: Option<&[u8]>,
+            addr: Option<nix::sys::socket::SockAddr>,
+            event_queue: &mut EventQueue,
+        ) -> SyscallReturn
+    );
+    enum_passthrough!(self, (event_queue), InetDgram;
+        pub fn close(&mut self, event_queue: &mut EventQueue) -> SyscallReturn
+    );
+    enum_passthrough!(self, (flags), InetDgram;
+        pub fn set_flags(&mut self, flags: FileFlags)
+    );
+    enum_passthrough!(self, (addr), InetDgram;
+        pub fn set_bound_address(&mut self, addr: nix::sys::socket::SockAddr) -> Result<(), String>
+    );
+    enum_passthrough!(self, (addr, event_queue), InetDgram;
+        pub fn connect(
+            &mut self,
+            addr: Option<nix::sys::socket::SockAddr>,
+            event_queue: &mut EventQueue,
+        ) -> SyscallReturn
+    );
+    enum_passthrough!(self, (how), InetDgram;
+        pub fn shutdown(&mut self, how: nix::sys::socket::Shutdown) -> SyscallReturn
+    );
+    enum_passthrough!(self, (sys, level, optname, optval_ptr, optval_len), InetDgram;
+        pub fn setsockopt(
+            &mut self,
+            sys: &mut c::SysCallHandler,
+            level: libc::c_int,
+            optname: libc::c_int,
+            optval_ptr: c::PluginPtr,
+            optval_len: libc::socklen_t,
+        ) -> SyscallReturn
+    );
+    enum_passthrough!(self, (packet, event_queue), InetDgram;
+        pub fn add_packet(&mut self, packet: Packet, event_queue: &mut EventQueue)
+    );
+    enum_passthrough!(self, (event_queue), InetDgram;
+        pub fn remove_packet(&mut self, event_queue: &mut EventQueue) -> Option<Packet>
+    );
+    enum_passthrough!(self, (ptr), InetDgram;
+        pub fn add_legacy_listener(&mut self, ptr: *mut c::StatusListener)
+    );
+    enum_passthrough!(self, (ptr), InetDgram;
+        pub fn remove_legacy_listener(&mut self, ptr: *mut c::StatusListener)
+    );
 }
 
 pub struct Packet {

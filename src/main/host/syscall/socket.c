@@ -1153,6 +1153,13 @@ SysCallReturn syscallhandler_setsockopt(SysCallHandler* sys,
                 sys, socket_desc, optname, optvalPtr, optlen);
             break;
         }
+        case SOL_TCP: {
+            if (optname == TCP_NODELAY) {
+                debug("Ignoring TCP_NODELAY");
+                errcode = 0;
+                break;
+            }
+        }
         default:
             warning("setsockopt called with unsupported level %i with opt %i", level, optname);
             errcode = -ENOPROTOOPT;

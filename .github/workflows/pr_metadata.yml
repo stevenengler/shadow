@@ -6,7 +6,7 @@ on:
   pull_request_target:
     # We probably want [opened, synchronize, milestoned] here, but the 'milestoned'
     # event trigger is not yet available on pull requests so we use best effort.
-    types: [opened, synchronize, reopened, assigned, edited, ready_for_review]
+    types: [opened, synchronize, reopened, assigned, edited, ready_for_review, labeled, unlabeled]
 
 permissions:
   pull-requests: write

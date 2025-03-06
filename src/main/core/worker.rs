@@ -354,9 +354,18 @@ impl Worker {
         let dst_ip = std::net::IpAddr::V4(dst_ip);
 
         // check if network reliability forces us to 'drop' the packet
-        let reliability: f64 = Worker::with(|w| w.shared.reliability(src_ip, dst_ip).unwrap())
-            .unwrap()
-            .into();
+        let Some(reliability) = Worker::with(|w| w.shared.reliability(src_ip, dst_ip)).unwrap()
+        else {
+            let (src, dst) = Worker::with(|w| {
+                (
+                    w.shared.ip_assignment.get_node(src_ip),
+                    w.shared.ip_assignment.get_node(dst_ip),
+                )
+            })
+            .unwrap();
+            panic!("STEVE: {src_ip}, {dst_ip} - {src:?}, {dst:?}");
+        };
+        let reliability: f64 = reliability.into();
         let chance: f64 = src_host.random_mut().random();
 
         // don't drop control packets with length 0, otherwise congestion control has problems

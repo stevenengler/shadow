@@ -183,6 +183,12 @@ impl UdpSocket {
             PacketRc::new_ipv4_udp(header.src, header.dst, message, header.packet_priority);
         packet.add_status(PacketStatus::SndCreated);
 
+        let src = packet.src_ipv4_address().ip().clone();
+        let dst = packet.dst_ipv4_address().ip().clone();
+        if src.is_loopback() && !dst.is_loopback() {
+            panic!("STEVE: trying to send packet from {src} to {dst}");
+        }
+
         self.refresh_readable_writable(FileSignals::empty(), cb_queue);
 
         Some(packet)

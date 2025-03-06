@@ -363,7 +363,7 @@ impl Worker {
                 )
             })
             .unwrap();
-            panic!("STEVE: {src_ip}, {dst_ip} - {src:?}, {dst:?}");
+            panic!("STEVE: {src_ip}, {dst_ip} - {src:?}, {dst:?} - {:?}", packetrc.iana_protocol());
         };
         let reliability: f64 = reliability.into();
         let chance: f64 = src_host.random_mut().random();

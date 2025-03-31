@@ -344,6 +344,8 @@ impl UdpSocket {
             return Err(Errno::EINVAL.into());
         };
 
+        // TODO: if we have a peer AND a destination address is provided, should we use the peer or
+        // the destination address?
         let dst_addr = match args.addr {
             Some(addr) => match addr.as_inet() {
                 // an inet socket address
@@ -395,13 +397,8 @@ impl UdpSocket {
             assert!(socket_ref.peer_addr.is_none());
             assert!(socket_ref.association.is_none());
 
-            // implicit bind (use default interface unless the remote peer is on loopback)
-            // TODO: is this correct? or should we bind to UNSPECIFIED?
-            let local_addr = if dst_addr.ip() == &std::net::Ipv4Addr::LOCALHOST {
-                SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)
-            } else {
-                SocketAddrV4::new(net_ns.default_ip, 0)
-            };
+            // implicit bind to 0.0.0.0
+            let local_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
             // this will allow us to receive packets from any peer
             let unspecified_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
